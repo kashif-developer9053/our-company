@@ -1,0 +1,29 @@
+name: Deploy to server
+
+# Every push to main deploys. The workflow only opens an SSH session and runs
+# ~/deploy.sh on the server — the build itself happens there, so the server and
+# the running app always share one source of truth.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:        # lets you deploy by hand from the Actions tab
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false  # never interrupt a deploy midway
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy over SSH
+        env:
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          ssh -o BatchMode=yes "$USER@$HOST" 'bash ~/deploy.sh'

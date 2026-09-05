@@ -1,0 +1,254 @@
+"""Continuous lead harvesting until a target number of QUALIFIED leads is met.
+
+A lead only counts toward the target when BOTH are true:
+  1. It has a real, verified way to contact them — an email actually published on
+     their own site (never an `info@domain` guess) or a valid phone number.
+  2. Its website has real, evidenced problems we can fix (site audit qualified).
+
+The harvester runs several search rounds with varied query phrasings, because a
+single search engine query caps out at ~20 results. It stops as soon as the
+target is reached, the query variants run out, or the time budget expires — so
+it never spins forever.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import time
+from datetime import datetime, timezone
+
+from shared.logger import get_logger
+
+from .contact_enrichment import enrich_lead_emails
+from .scraper import scrape_google_maps
+from .site_auditor import audit_leads
+from .website_miner import mine_business_websites
+
+log = get_logger("agent1.harvester")
+
+# Query shapes that surface different businesses for the same niche.
+_QUERY_TEMPLATES = (
+    "{niche} in {where}",
+    "{niche} {where} contact",
+    "best {niche} in {where}",
+    "{niche} services {where}",
+    "top {niche} companies {where}",
+    "{niche} near {where}",
+    "local {niche} {where}",
+    "{niche} company {where} email",
+    "affordable {niche} {where}",
+    "{niche} {where} phone number",
+    "list of {niche} in {where}",
+    "{niche} directory {where}",
+    "small {niche} business {where}",
+    "{niche} {where} about us",
+    "professional {niche} {where}",
+    "{niche} firm {where}",
+)
+
+_DEFAULT_TIME_BUDGET = 1800  # seconds; a hard ceiling on one harvest run
+_AUDIT_CONCURRENCY = 12      # sites audited in parallel (each is a light HTTP GET)
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _lead_key(lead: dict) -> str:
+    site = (lead.get("website") or "").strip().lower()
+    if site:
+        host = site.split("//")[-1].split("/")[0]
+        return host[4:] if host.startswith("www.") else host
+    return (lead.get("business_name") or "").strip().lower()
+
+
+def has_real_contact(lead: dict) -> tuple[bool, str]:
+    """A contact route we actually observed — never a guessed address.
+
+    Returns (ok, description). `email_confidence == "guessed"` is rejected: those
+    are invented `info@domain` addresses that bounce and damage sender reputation.
+    """
+    email = (lead.get("email") or "").strip()
+    confidence = (lead.get("email_confidence") or "").strip()
+    if email and confidence != "guessed":
+        return True, f"published email {email}"
+    # The website miner records where each contact was found.
+    if email and lead.get("email_source_url"):
+        return True, f"published email {email}"
+    phone = (lead.get("phone") or "").strip()
+    if phone:
+        return True, f"listed phone {phone}"
+    if lead.get("whatsapp"):
+        return True, "WhatsApp contact"
+    return False, "no verified contact method (guessed addresses don't count)"
+
+
+def _merge(existing: dict[str, dict], incoming: list[dict]) -> int:
+    """Merge new leads into the pool, filling blanks on duplicates. Returns
+    how many genuinely new businesses were added."""
+    added = 0
+    for lead in incoming:
+        key = _lead_key(lead)
+        if not key:
+            continue
+        if key in existing:
+            for field, value in lead.items():
+                if value and not existing[key].get(field):
+                    existing[key][field] = value
+        else:
+            existing[key] = dict(lead)
+            added += 1
+    return added
+
+
+async def harvest_leads(
+    niche: str,
+    city: str = "",
+    country: str = "",
+    target: int = 50,
+    time_budget: int = _DEFAULT_TIME_BUDGET,
+    exclude_keys: set[str] | None = None,
+    progress=None,
+) -> dict:
+    """Search repeatedly until `target` qualified leads are collected.
+
+    `progress` is an optional callable(str) used to report live status.
+    `exclude_keys` lets a follow-up run skip businesses already collected.
+    """
+    where = ", ".join(x for x in (city, country) if x) or "your area"
+    started = time.perf_counter()
+    exclude = exclude_keys or set()
+
+    pool: dict[str, dict] = {}       # every business seen this run
+    qualified: dict[str, dict] = {}  # those meeting BOTH criteria
+    rejected = {"no_contact": 0, "good_site": 0, "guessed_email_only": 0}
+    rounds_run = 0
+    barren_rounds = 0  # consecutive rounds that surfaced no new businesses
+
+    def say(msg: str) -> None:
+        log.info(msg)
+        if progress:
+            try:
+                progress(msg)
+            except Exception:  # noqa: BLE001
+                pass
+
+    for template in _QUERY_TEMPLATES:
+        if len(qualified) >= target:
+            break
+        if time.perf_counter() - started > time_budget:
+            say(f"Time budget reached after {rounds_run} search rounds.")
+            break
+
+        rounds_run += 1
+        query = template.format(niche=niche, where=where)
+        say(f"Round {rounds_run}: searching '{query}' ({len(qualified)}/{target} qualified so far)")
+
+        fresh: list[dict] = []
+        # 1) Google Maps (good for phone numbers + addresses)
+        try:
+            maps = await scrape_google_maps(query, max_results=20)
+            if maps.get("ok"):
+                fresh.extend(maps.get("leads", []))
+        except Exception as exc:  # noqa: BLE001 - one source failing is survivable
+            log.error("Maps round failed (isolated): %s", exc)
+        # 2) Our own web crawler (good for published emails)
+        try:
+            mined = await mine_business_websites(query, max_results=20)
+            if mined.get("ok"):
+                fresh.extend(mined.get("leads", []))
+        except Exception as exc:  # noqa: BLE001
+            log.error("Web mining round failed (isolated): %s", exc)
+
+        # Drop anything already collected in a previous run or round.
+        raw_count = len(fresh)
+        fresh = [l for l in fresh if _lead_key(l) and _lead_key(l) not in exclude and _lead_key(l) not in pool]
+        if not fresh:
+            barren_rounds += 1
+            say(f"Round {rounds_run}: all {raw_count} results were already known — nothing new.")
+            # If several rounds in a row surface nothing new, this niche/area is
+            # genuinely exhausted; stop rather than burning the whole budget.
+            if barren_rounds >= 3:
+                say("Three rounds with no new businesses — this niche/area looks exhausted.")
+                break
+            continue
+        barren_rounds = 0
+        _merge(pool, fresh)
+
+        # 3) Find REAL published emails for the new candidates.
+        try:
+            await enrich_lead_emails(fresh, concurrency=8)
+        except Exception as exc:  # noqa: BLE001
+            log.error("Enrichment failed (isolated): %s", exc)
+
+        # 4) Audit their sites so every kept lead has evidenced problems.
+        try:
+            await audit_leads(fresh, concurrency=_AUDIT_CONCURRENCY)
+        except Exception as exc:  # noqa: BLE001
+            log.error("Audit failed (isolated): %s", exc)
+
+        # 5) Apply BOTH gates.
+        for lead in fresh:
+            key = _lead_key(lead)
+            if key in qualified:
+                continue
+            contact_ok, contact_desc = has_real_contact(lead)
+            if not contact_ok:
+                rejected["no_contact"] += 1
+                if (lead.get("email_confidence") or "") == "guessed":
+                    rejected["guessed_email_only"] += 1
+                continue
+            if not lead.get("site_audit", {}).get("qualified"):
+                rejected["good_site"] += 1
+                continue
+            lead["contact_verified"] = contact_desc
+            lead["niche"] = lead.get("niche") or niche
+            lead["city"] = lead.get("city") or city
+            lead["country"] = lead.get("country") or country
+            qualified[key] = lead
+            if len(qualified) >= target:
+                break
+
+        say(f"Round {rounds_run} done — {len(qualified)}/{target} qualified "
+            f"({rejected['no_contact']} no contact, {rejected['good_site']} site already fine)")
+
+    elapsed = int(time.perf_counter() - started)
+    leads = list(qualified.values())
+    leads.sort(key=lambda l: l.get("opportunity_score", 0), reverse=True)
+
+    complete = len(leads) >= target
+    if complete:
+        message = f"Found {len(leads)} qualified leads for {niche} in {where}."
+    else:
+        # Explain WHICH constraint ran out, so the CEO knows what to change.
+        if barren_rounds >= 3:
+            why = (f"I ran out of new businesses — searches kept returning the same {len(pool)} "
+                   f"companies I had already checked.")
+        elif time.perf_counter() - started > time_budget:
+            why = f"I hit the {time_budget // 60}-minute time limit for one hunt."
+        else:
+            why = (f"I used all {rounds_run} search phrasings I have for this niche and only "
+                   f"{len(pool)} distinct businesses exist in these results.")
+        message = (
+            f"Found {len(leads)} of the {target} you asked for, in {niche} ({where}). {why} "
+            f"Of the {len(pool)} businesses I examined, {rejected['no_contact']} had no verified "
+            f"contact (guessed addresses don't count) and {rejected['good_site']} already have good "
+            f"websites, so they aren't prospects. To get more, try a wider location or another niche."
+        )
+
+    return {
+        "ok": True,
+        "leads": leads,
+        "found": len(leads),
+        "target": target,
+        "complete": complete,
+        "rounds": rounds_run,
+        "examined": len(pool),
+        "rejected": rejected,
+        "elapsed_seconds": elapsed,
+        "niche": niche,
+        "city": city,
+        "country": country,
+        "message": message,
+        "harvested_at": _now(),
+    }

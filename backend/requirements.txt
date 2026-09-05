@@ -1,0 +1,14 @@
+fastapi
+uvicorn
+pymongo
+mongomock
+python-dotenv
+python-multipart
+bcrypt
+PyJWT
+cryptography
+httpx
+certifi
+pypdf
+python-docx
+dnspython

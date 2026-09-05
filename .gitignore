@@ -1,0 +1,51 @@
+# ---- secrets: NEVER commit these -------------------------------------------
+# backend/.env holds MONGO_URI, ENCRYPTION_SECRET, AUTH_SECRET.
+# .env.local holds the frontend API base.
+# On the server these are created by hand and stay out of git entirely.
+.env
+.env.*
+!.env.example
+backend/.env
+backend/.env.*
+!backend/.env.example
+
+# ---- dependencies (rebuilt on the server) ----------------------------------
+node_modules/
+backend-venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# ---- build output ----------------------------------------------------------
+.next/
+out/
+dist/
+build/
+*.tsbuildinfo
+
+# ---- runtime / generated ---------------------------------------------------
+.build_staging/
+backend/.build_staging/
+*.log
+logs/
+
+# ---- local scratch ---------------------------------------------------------
+preview.html
+scratch_*.html
+*.local
+
+# ---- editor / OS -----------------------------------------------------------
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# ---- the other developer's copy of the project ------------------------------
+# Kept locally for reference; not part of this codebase.
+our-company/
+
+# SSH keys for the server — must NEVER be committed
+.ssh/
+*.key
+*.pem
