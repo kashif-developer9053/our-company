@@ -88,16 +88,34 @@ def _lead_key(lead: dict) -> str:
 def has_real_contact(lead: dict) -> tuple[bool, str]:
     """A contact route we actually observed — never a guessed address.
 
-    Returns (ok, description). `email_confidence == "guessed"` is rejected: those
-    are invented `info@domain` addresses that bounce and damage sender reputation.
+    "Guessed" means `info@<domain>` invented purely because the domain resolves.
+    Nobody checked that the mailbox exists, so these are the addresses that hard
+    bounce, and bounce rate is what gets a sending domain filtered.
+
+    This gate is about EMAILABILITY specifically. A listed phone number is a
+    real contact route, but it does not make a guessed address safe to mail —
+    an earlier version accepted the lead on the strength of the phone and then
+    the outreach agent mailed the invented address anyway. A phone-only lead is
+    therefore kept only when it carries no fabricated email to mail.
     """
     email = (lead.get("email") or "").strip()
-    confidence = (lead.get("email_confidence") or "").strip()
-    if email and confidence != "guessed":
-        return True, f"published email {email}"
-    # The website miner records where each contact was found.
-    if email and lead.get("email_source_url"):
-        return True, f"published email {email}"
+    confidence = (lead.get("email_confidence") or "").strip().lower()
+    source_url = (lead.get("email_source_url") or "").strip()
+
+    if email:
+        # Observed on the site, or reported by a miner that recorded where.
+        if confidence in ("found", "published") or source_url:
+            return True, f"published email {email}"
+        if confidence == "verified_guess":
+            # A pattern address the receiving mail server confirmed exists.
+            return True, f"verified address {email}"
+        if confidence == "guessed":
+            return False, f"only a guessed address ({email}) — not verified, likely to bounce"
+        # Blank confidence means nothing recorded the provenance. Treating that
+        # as "published" is how invented addresses slipped through before, so
+        # an unattributed address is not trusted.
+        return False, f"email {email} has no recorded source — cannot confirm it is real"
+
     phone = (lead.get("phone") or "").strip()
     if phone:
         return True, f"listed phone {phone}"

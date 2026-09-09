@@ -77,13 +77,37 @@ def _domain_resolves(domain: str) -> bool:
 
 
 def _email_for(lead: dict, domain: str) -> tuple[str, str]:
-    """Return (email, confidence) where confidence is found|guessed|none."""
+    """Return (email, confidence) where confidence is found|guessed|none.
+
+    A guessed address is only ever `info@<domain>` invented because the domain
+    resolved. A resolving domain says nothing about whether that mailbox
+    exists, so these bounce — and bounce rate is what gets a sending domain
+    filtered. We therefore ask the receiving mail server whether it would
+    accept the address before keeping it.
+
+    Only a definitive rejection discards the guess: a catch-all domain,
+    greylisting or a blocked port 25 all come back "unknown", and those are
+    kept (still marked `guessed`) so the pre-send check can decide later.
+    """
     scraped = (lead.get("email") or "").strip()
     if scraped and "@" in scraped:
         return scraped, "found"
-    if domain and _domain_resolves(domain):
-        return f"info@{domain}", "guessed"
-    return "", "none"
+    if not domain or not _domain_resolves(domain):
+        return "", "none"
+
+    candidate = f"info@{domain}"
+    try:
+        from agent3.verify_email import verify as _verify
+        res = _verify(candidate, timeout=8)
+        if res["status"] == "invalid":
+            log.info("Discarded guessed address %s: %s", candidate, res["reason"])
+            return "", "none"
+        if res["status"] == "valid":
+            # The mail server confirmed this mailbox exists.
+            return candidate, "verified_guess"
+    except Exception as exc:  # noqa: BLE001 - verification must never block intake
+        log.warning("Could not verify %s (%s) - keeping as guessed", candidate, exc)
+    return candidate, "guessed"
 
 
 def _is_duplicate(business_name: str, phone: str, domain: str) -> bool:

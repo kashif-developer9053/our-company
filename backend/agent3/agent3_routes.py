@@ -601,7 +601,20 @@ async def draft_batch(body: DraftBatchBody):
         already = {d["lead_id"] for d in _drafts().find({"status": {"$in": ["pending", "sent"]}}, {"lead_id": 1})}
         # Campaigns run better one city/industry at a time — the copy stays
         # consistent and you can judge what actually gets replies.
-        query: dict = {"status": "verified", "email": {"$nin": ["", None]}}
+        # Never draft to an address nobody verified. `guessed` is an invented
+        # info@<domain> that no one confirmed exists, and an address with no
+        # recorded confidence has no provenance either — both hard bounce, and
+        # bounce rate is what gets the sending domain filtered. A lead can be
+        # rescued by /agent3/verify-emails, which promotes a guess that the
+        # receiving server actually accepts.
+        query: dict = {
+            "status": "verified",
+            "email": {"$nin": ["", None]},
+            "$or": [
+                {"email_confidence": {"$in": ["found", "published", "verified_guess"]}},
+                {"email_verify.status": {"$in": ["valid", "catch_all"]}},
+            ],
+        }
         if body.city:
             query["city"] = {"$regex": f"^{re.escape(body.city.strip())}$", "$options": "i"}
         if body.niche:
@@ -611,11 +624,28 @@ async def draft_batch(body: DraftBatchBody):
         # (highest opportunity score). Leads with no findings give the writer
         # nothing concrete to say, so they go last.
         candidates.sort(key=lambda d: (
+            # A confirmed address first: a bounce costs more than a weak pitch.
+            (d.get("email_confidence") or "") in ("found", "published"),
             bool((d.get("site_audit") or {}).get("findings")),
+            d.get("fit_score", 0),
             d.get("opportunity_score", 0),
         ), reverse=True)
         leads = candidates[:n]
     if not leads:
+        # Distinguish "nothing approved" from "nothing with a trustworthy
+        # address", because the fix is completely different.
+        unverified = _leads().count_documents({
+            "status": "verified", "email": {"$nin": ["", None]},
+            "email_confidence": {"$nin": ["found", "published", "verified_guess"]},
+            "email_verify.status": {"$exists": False},
+        })
+        if unverified:
+            return {"ok": True, "batch_id": "", "drafted": 0,
+                    "note": (f"{unverified} approved leads only have guessed addresses "
+                             f"(invented info@ that nobody confirmed). Run 'Verify guessed "
+                             f"addresses' on the Outreach page — the ones a mail server "
+                             f"accepts become sendable, and the rest are dropped before "
+                             f"they can bounce.")}
         return {"ok": True, "batch_id": "", "drafted": 0,
                 "note": "No approved leads are waiting for an email. Approve leads in the CRM first."}
 
@@ -758,6 +788,10 @@ async def verify_emails(body: VerifyBody):
         res = await asyncio.to_thread(verify_address, addr)
         counts[res["status"]] = counts.get(res["status"], 0) + 1
         update: dict = {"email_verify": res}
+        # A guess the receiving server actually accepts is no longer a guess,
+        # so promote it and let the lead back into the sending pool.
+        if res["status"] == "valid" and (lead.get("email_confidence") or "") == "guessed":
+            update["email_confidence"] = "verified_guess"
         # An address the receiving server refuses will hard-bounce. Suppress it
         # now rather than learning the expensive way.
         if res["status"] == "invalid":
