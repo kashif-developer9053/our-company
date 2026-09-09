@@ -275,7 +275,17 @@ async def harvest_leads_route(body: HarvestBody):
     # Don't re-collect businesses we already hold.
     exclude: set[str] = set()
     if body.exclude_existing:
-        for d in get_db()["leads"].find({}, {"business_name": 1, "website": 1}):
+        # Only block re-discovery of leads we actually still hold. Excluding
+        # rejected ones too meant 141 businesses could never be found again —
+        # including those rejected for "no contact", which is a verdict that
+        # changes as soon as the web crawler turns up a published address.
+        # Competitors and blocked entries stay excluded: those verdicts are
+        # about what the business IS, so re-finding them only wastes rounds.
+        keep_out = {"competitor", "blocked", "junk"}
+        for d in get_db()["leads"].find(
+                {}, {"business_name": 1, "website": 1, "status": 1, "rejection_reason": 1}):
+            if d.get("status") == "rejected" and d.get("rejection_reason") not in keep_out:
+                continue
             site = (d.get("website") or "").strip().lower()
             if site:
                 host = site.split("//")[-1].split("/")[0]

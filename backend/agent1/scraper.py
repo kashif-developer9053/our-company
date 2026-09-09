@@ -90,7 +90,7 @@ async def scrape_google_maps(query: str, max_results: int = 20) -> dict:
                     break
                 seen = count
                 await feed.evaluate("el => el.scrollBy(0, el.scrollHeight)")
-                await _pause(1.2, 2.6)
+                await _pause(0.7, 1.5)
 
             anchors = feed.locator(place_sel)
             n = min(await anchors.count(), max_results)
@@ -112,7 +112,7 @@ async def scrape_google_maps(query: str, max_results: int = 20) -> dict:
             for name, href, card_text in targets:
                 try:
                     await page.goto(href, wait_until="domcontentloaded", timeout=30000)
-                    await _pause(1.0, 2.5)
+                    await _pause(0.4, 1.1)
                     phone = await _extract_phone(page)
                     website = await _extract_website(page)
                     leads.append(_build_lead(name, card_text, phone, website))

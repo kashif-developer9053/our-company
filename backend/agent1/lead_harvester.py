@@ -61,7 +61,10 @@ _QUERY_TEMPLATES = (
     "{niche} consultancy {where}",
 )
 
-_DEFAULT_TIME_BUDGET = 1800  # seconds; a hard ceiling on one harvest run
+# A round costs about 3-5 minutes, nearly all of it in Maps and the web
+# crawler. At 30 minutes a hunt got through only ~6 rounds, which is not enough
+# to reach a 20+ target once duplicates are excluded.
+_DEFAULT_TIME_BUDGET = 3600  # seconds; a hard ceiling on one harvest run
 
 # Consecutive rounds returning nothing new before we call a niche exhausted.
 # This was 3, which quit far too early: once part of a niche is collected,
@@ -76,6 +79,25 @@ _BARREN_LIMIT = 6
 # at 20 per round a first hunt yielded only three or four qualified leads. One
 # search returning 40 costs little more than one returning 20.
 _PER_ROUND = 40
+
+# Below this many qualified leads a run is considered "thin" and tolerates far
+# more empty rounds before giving up — the point at which persistence is worth
+# most is precisely when little has been found.
+_PERSIST_UNTIL = 20
+_BARREN_LIMIT_THIN = 12
+
+# A hunt returning fewer than this has not really answered the question, so it
+# escalates to nearby-area searches before reporting back.
+_MIN_ACCEPTABLE = 20
+
+# Used only for that escalation: same niche, deliberately looser geography.
+_WIDEN_TEMPLATES = (
+    "{niche} near {where}",
+    "{niche} {country}",
+    "best {niche} {country}",
+    "{niche} services near {where}",
+    "{niche} in {country} contact",
+)
 _AUDIT_CONCURRENCY = 12      # sites audited in parallel (each is a light HTTP GET)
 
 
@@ -215,9 +237,15 @@ async def harvest_leads(
             say(f"Round {rounds_run}: all {raw_count} results were already known — nothing new.")
             # If several rounds in a row surface nothing new, this niche/area is
             # genuinely exhausted; stop rather than burning the whole budget.
-            if barren_rounds >= _BARREN_LIMIT:
-                say(f"{_BARREN_LIMIT} rounds with no new businesses — this niche/area looks "
-                    f"exhausted. Try widening the location or a different niche.")
+            # Be far more stubborn while the haul is still thin. Quitting after
+            # a few empty rounds is reasonable once there is a decent pile, but
+            # when almost nothing has been found the remaining templates are
+            # exactly what might work, so push on through the empty ones.
+            limit = _BARREN_LIMIT if len(qualified) >= _PERSIST_UNTIL else _BARREN_LIMIT_THIN
+            if barren_rounds >= limit:
+                say(f"{barren_rounds} rounds with no new businesses and "
+                    f"{len(qualified)} qualified so far — this niche/area looks exhausted. "
+                    f"Try widening the location or a different niche.")
                 break
             continue
         barren_rounds = 0
@@ -259,6 +287,63 @@ async def harvest_leads(
 
         say(f"Round {rounds_run} done — {len(qualified)}/{target} qualified "
             f"({rejected['no_contact']} no contact, {rejected['good_site']} site already fine)")
+
+    # Still short after every template? The businesses are usually there, just
+    # not ranking under this exact city wording. Retry with nearby-area phrasing
+    # before giving up, rather than handing back a near-empty result and making
+    # the CEO work out that "widen the location" was the missing step.
+    if (len(qualified) < min(target, _MIN_ACCEPTABLE)
+            and city
+            and time.perf_counter() - started < time_budget * 0.75):
+        say(f"Only {len(qualified)} found in {where} — widening to the surrounding area.")
+        for template in _WIDEN_TEMPLATES:
+            if len(qualified) >= target or time.perf_counter() - started > time_budget:
+                break
+            rounds_run += 1
+            query = template.format(niche=niche, where=where, country=country or where)
+            say(f"Round {rounds_run} (widened): '{query}' ({len(qualified)}/{target})")
+            wider: list[dict] = []
+            try:
+                mres = await scrape_google_maps(query, max_results=_PER_ROUND)
+                if mres.get("ok"):
+                    wider.extend(mres.get("leads", []))
+            except Exception as exc:  # noqa: BLE001
+                log.error("Widened maps round failed (isolated): %s", exc)
+            try:
+                wres = await mine_business_websites(query, max_results=_PER_ROUND)
+                if wres.get("ok"):
+                    wider.extend(wres.get("leads", []))
+            except Exception as exc:  # noqa: BLE001
+                log.error("Widened mining round failed (isolated): %s", exc)
+
+            wider = [l for l in wider
+                     if _lead_key(l) and _lead_key(l) not in exclude and _lead_key(l) not in pool]
+            if not wider:
+                continue
+            _merge(pool, wider)
+            try:
+                await enrich_lead_emails(wider, concurrency=8)
+                await audit_leads(wider, concurrency=_AUDIT_CONCURRENCY)
+            except Exception as exc:  # noqa: BLE001
+                log.error("Widened enrichment/audit failed (isolated): %s", exc)
+            for lead in wider:
+                key = _lead_key(lead)
+                if key in qualified:
+                    continue
+                contact_ok, contact_desc = has_real_contact(lead)
+                if not contact_ok:
+                    rejected["no_contact"] += 1
+                    continue
+                if not lead.get("site_audit", {}).get("qualified"):
+                    rejected["good_site"] += 1
+                    continue
+                lead["contact_verified"] = contact_desc
+                lead["niche"] = lead.get("niche") or niche
+                lead["city"] = lead.get("city") or city
+                lead["country"] = lead.get("country") or country
+                qualified[key] = lead
+                if len(qualified) >= target:
+                    break
 
     elapsed = int(time.perf_counter() - started)
     leads = list(qualified.values())
