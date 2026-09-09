@@ -59,12 +59,40 @@ _EXCLUDED_DISCOVERY_DOMAINS = {
     "duckduckgo.com", "google.com", "bing.com", "facebook.com", "instagram.com",
     "linkedin.com", "youtube.com", "x.com", "twitter.com", "pinterest.com",
     "wikipedia.org", "yelp.com", "tripadvisor.com", "yellowpages.com",
+    # Q&A, forums and docs. A search for a niche often ranks a StackExchange
+    # thread above the businesses themselves, and the crawler was turning
+    # "Stack Overflow" and "Find Answers" into leads for solar suppliers.
+    "stackexchange.com", "stackoverflow.com", "reddit.com", "quora.com",
+    "medium.com", "github.com", "gitlab.com", "wordpress.com", "blogspot.com",
+    "dynamics.com", "salesforce.com", "microsoft.com", "apple.com", "amazon.com",
+    "wix.com", "squarespace.com", "shopify.com", "godaddy.com", "cloudflare.com",
+    # Job boards: they carry an employer's name but are never the business.
+    "indeed.com", "glassdoor.com", "monster.com", "ziprecruiter.com",
+    "naukri.com", "rozee.pk", "bayt.com", "jobs.ac.uk", "totaljobs.com",
+    # Lead-gen and scraper tooling, which ranks well for "company email".
+    "prospeo.io", "hunter.io", "snov.io", "apollo.io", "lusha.com",
+    "rocketreach.co", "zoominfo.com", "crunchbase.com", "datanyze.com",
+    "signalhire.com", "contactout.com", "leadiq.com",
 }
+
+# Words that mean the page is ABOUT businesses rather than being one.
+_NON_BUSINESS_NAME_HINTS = (
+    "stack overflow", "stack exchange", "find answers", "unspecified",
+    "sign in", "log in", "register", "search results", "job search",
+    "select your interest", "cookie", "privacy policy", "terms of service",
+    "404", "not found", "access denied", "just a moment",
+)
 _DIRECTORY_DOMAIN_HINTS = (
     "directory", "yellowpage", "businesslist", "infomedia", "kompass",
     "listing", "lookup", "clutch", "ensun", "dnb", "aeroleads", "urdupoint",
 )
-_DIRECTORY_PATH_HINTS = ("/listing-category/", "/category/", "/directory/", "/business-directory/", "/list/")
+_DIRECTORY_PATH_HINTS = ("/listing-category/", "/category/", "/directory/", "/business-directory/", "/list/",
+                         "/jobs/", "/job/", "/vacancies/", "/careers/", "/questions/", "/forums/", "/forum/")
+# Naming an unlisted job board or Q&A site is impossible, so match the pattern:
+# a host containing these is about employment or discussion, not a business we
+# can sell a website to.
+_NON_BUSINESS_DOMAIN_HINTS = ("jobs", "careers", "recruit", "vacanc", "hiring",
+                              "forum", "answers", "wiki", "blog")
 _GENERIC_PAGE_TITLES = {
     "home", "homepage", "welcome", "contact", "contact us", "about", "about us",
     "get in touch", "our company", "official website",
@@ -242,6 +270,14 @@ def _unwrap_yahoo_url(href: str) -> str:
     return _normalise_url(raw)
 
 
+def _looks_like_non_business(name: str) -> bool:
+    """True when the scraped title is site furniture, not a company name."""
+    n = (name or "").strip().lower()
+    if not n or len(n) < 2:
+        return True
+    return any(h in n for h in _NON_BUSINESS_NAME_HINTS)
+
+
 def _excluded_discovery_url(url: str) -> bool:
     domain = _domain(url)
     path = urlparse(url).path.lower()
@@ -249,7 +285,11 @@ def _excluded_discovery_url(url: str) -> bool:
         return True
     if any(domain == blocked or domain.endswith(f".{blocked}") for blocked in _EXCLUDED_DISCOVERY_DOMAINS):
         return True
-    return any(hint in domain for hint in _DIRECTORY_DOMAIN_HINTS) or any(hint in path for hint in _DIRECTORY_PATH_HINTS)
+    if any(hint in domain for hint in _DIRECTORY_DOMAIN_HINTS):
+        return True
+    if any(hint in path for hint in _DIRECTORY_PATH_HINTS):
+        return True
+    return any(hint in domain for hint in _NON_BUSINESS_DOMAIN_HINTS)
 
 
 def _clean_business_name(title: str, url: str) -> str:
@@ -337,10 +377,15 @@ def _parse_search_results(page_html: str) -> list[dict]:
             continue
         if domain in seen:
             continue
+        name = _clean_business_name(anchor.get("text", ""), url)
+        # A search for a niche ranks Q&A threads, job ads and sign-in pages
+        # alongside real businesses; their titles give them away.
+        if _looks_like_non_business(name):
+            continue
         seen.add(domain)
         results.append({
             "url": url,
-            "business_name": _clean_business_name(anchor.get("text", ""), url),
+            "business_name": name,
             "discovery_source": "duckduckgo_web_search",
         })
     return results
@@ -358,10 +403,13 @@ def _parse_yahoo_results(page_html: str) -> list[dict]:
         domain = _domain(url)
         if not url or not domain or domain in seen or _excluded_discovery_url(url) or _looks_like_listing(anchor.get("text", ""), url):
             continue
+        name = _clean_business_name(anchor.get("text", ""), url)
+        if _looks_like_non_business(name):
+            continue
         seen.add(domain)
         results.append({
             "url": url,
-            "business_name": _clean_business_name(anchor.get("text", ""), url),
+            "business_name": name,
             "discovery_source": "yahoo_web_search",
         })
     return results
