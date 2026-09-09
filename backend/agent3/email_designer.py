@@ -403,6 +403,35 @@ def render_email_html(body: str, lead: dict, profile: dict) -> str:
 # the shape of an email one person writes to another: white background, normal
 # text, a light rule, a small signature. Roughly a third of the markup.
 # ---------------------------------------------------------------------------
+
+# Finding code -> what it actually costs the owner, in plain language.
+# Deliberately vague about the CAUSE: that is what the reply is for.
+_CONSEQUENCE_LINES = {
+    "no_website": "Anyone who looks you up online finds nothing, and goes to whoever they find instead.",
+    "site_unreachable": "Your site is not opening for people who try to visit it.",
+    "http_error": "Visitors are hitting an error page instead of your business.",
+    "no_https": "Browsers are warning visitors that your site is not secure, which puts people off.",
+    "very_slow": "People give up and leave before your page finishes opening.",
+    "slow": "The site is slow enough that some visitors leave before they see anything.",
+    "not_mobile_friendly": "On a phone it is awkward to use, and most people look you up on a phone.",
+    "no_contact_route": "Someone ready to get in touch cannot easily find a way to do it.",
+    "no_contact_form": "Interested visitors have no quick way to send an enquiry, so most simply do not.",
+    "no_title": "You are close to invisible when someone searches for what you do.",
+    "weak_title": "You look less convincing than competitors in search results.",
+    "no_meta_description": "You are losing clicks in search to firms that look more relevant.",
+    "no_h1": "Search engines cannot tell what you do, so you rank below others who are clearer.",
+    "no_structured_data": "Competitors show up with richer, more clickable listings than you do.",
+    "images_missing_alt": "You are missing search traffic, and some visitors cannot use the site properly.",
+    "no_analytics": "You have no way of knowing where your enquiries actually come from.",
+    "outdated_cms": "The site runs on out-of-date software, which is a real security risk.",
+    "table_layout": "The site looks dated next to competitors and breaks on phones.",
+    "legacy_html": "It looks visibly old, which quietly costs you credibility with new clients.",
+    "flash_content": "Part of your site no longer displays for anyone at all.",
+    "heavy_page": "It is heavy enough that people on slower connections give up.",
+    "no_open_graph": "When someone shares your link it looks broken, which discourages the click.",
+    "no_whatsapp": "Clients who prefer WhatsApp have no easy way to reach you.",
+}
+
 LITE_INK = "#1a1a1a"        # near-black body text, like a normal email
 LITE_MUTED = "#666666"
 LITE_RULE = "#e4e6ea"
@@ -426,7 +455,6 @@ def render_email_lite(body: str, lead: dict, profile: dict) -> str:
                 else (f"Hi {clean_name} team," if clean_name else "Hi there,"))
 
     findings = (lead.get("site_audit") or {}).get("findings") or []
-    serious = sum(1 for f in findings if f.get("severity") in ("critical", "high"))
 
     # Body copy as ordinary paragraphs — no oversized headline treatment.
     paras = "".join(
@@ -434,27 +462,31 @@ def render_email_lite(body: str, lead: dict, profile: dict) -> str:
         for t in _paragraphs(body)
     )
 
-    # Findings as a short indented list, the way a person would actually type
-    # them — not a dashboard card. Titles only; the detail is the reply hook.
+    # NEVER list the technical findings. "No H1 heading" means nothing to a
+    # solicitor and gives away the diagnosis for free — they forward it to a
+    # cheaper developer and we get nothing. Say what it COSTS them instead,
+    # in their language, and keep the specifics as the reason to reply.
     findings_block = ""
     if findings:
-        n = serious or len(findings)
-        items = "".join(
-            f'<tr><td valign="top" style="padding:0 8px 6px 0;color:{LITE_GREEN};'
-            f'font-size:14px;line-height:1.5;">&bull;</td>'
-            f'<td style="padding:0 0 6px;font-size:14.5px;line-height:1.5;color:{LITE_INK};">'
-            f'{_esc(f.get("title",""))}</td></tr>'
-            for f in findings[:3]
-        )
-        more = len(findings) - min(3, len(findings))
-        more_line = (f'<p style="margin:8px 0 0;font-size:13.5px;color:{LITE_MUTED};">'
-                     f'&hellip;and {more} more.</p>') if more > 0 else ""
-        findings_block = (
-            f'<p style="margin:0 0 10px;font-size:15px;line-height:1.65;color:{LITE_INK};">'
-            f'{n} thing{"s" if n != 1 else ""} stood out:</p>'
-            f'<table role="presentation" cellpadding="0" cellspacing="0" border="0" '
-            f'style="margin:0 0 16px 4px;">{items}</table>{more_line}'
-        )
+        seen: list[str] = []
+        for f in findings:
+            line = _CONSEQUENCE_LINES.get(f.get("code", ""))
+            if line and line not in seen:
+                seen.append(line)
+        if seen:
+            items = "".join(
+                f'<tr><td valign="top" style="padding:0 8px 7px 0;color:{LITE_GREEN};'
+                f'font-size:14px;line-height:1.5;">&bull;</td>'
+                f'<td style="padding:0 0 7px;font-size:14.5px;line-height:1.55;color:{LITE_INK};">'
+                f'{_esc(x)}</td></tr>'
+                for x in seen[:3]
+            )
+            findings_block = (
+                f'<p style="margin:0 0 10px;font-size:15px;line-height:1.65;color:{LITE_INK};">'
+                f'What that means in practice:</p>'
+                f'<table role="presentation" cellpadding="0" cellspacing="0" border="0" '
+                f'style="margin:0 0 16px 4px;">{items}</table>'
+            )
 
     # Services as one quiet sentence, not a panel.
     services_line = ""
@@ -497,7 +529,9 @@ def render_email_lite(body: str, lead: dict, profile: dict) -> str:
     {findings_block}
     {services_line}
     <p style="margin:0 0 22px;font-size:15px;line-height:1.65;color:{LITE_INK};">
-      Want me to send over what I found? Just hit reply.
+      We can tidy up what you have, or build you something new &mdash; whichever
+      makes more sense once we&rsquo;ve talked. Happy to walk you through it on a
+      quick call; just hit reply.
     </p>
   </td></tr>
 
