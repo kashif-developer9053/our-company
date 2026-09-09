@@ -107,13 +107,23 @@ sudo chmod 440 /etc/sudoers.d/eldiancore
 
 sudo systemctl daemon-reload
 sudo systemctl enable --now eldiancore-api eldiancore-web
-sleep 10
 
 echo "==> Status"
 for svc in eldiancore-api eldiancore-web; do
   echo "    $svc: $(systemctl is-active "$svc")"
 done
-echo "    backend health: $(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:${API_PORT}/health || echo 000)"
+
+# Poll rather than sleeping a fixed amount: a cold start needs ~15s for DNS
+# plus the first MongoDB Atlas connection, and a short sleep reports a false
+# failure on a backend that is simply still starting.
+HEALTH=000
+for i in $(seq 1 30); do
+  HEALTH=$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 "http://127.0.0.1:${API_PORT}/health" || true)
+  [ -z "$HEALTH" ] && HEALTH=000
+  [ "$HEALTH" = "200" ] && break
+  sleep 2
+done
+echo "    backend health: $HEALTH (after $((i * 2))s)"
 echo
 echo "Services are running on 127.0.0.1 only. Nginx is configured separately"
 echo "(see deploy/README.md) so the existing site is never touched."

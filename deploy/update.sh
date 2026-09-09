@@ -25,7 +25,6 @@ npm run build 2>&1 | tail -4
 echo "==> Restarting services"
 sudo systemctl restart eldiancore-api
 sudo systemctl restart eldiancore-web
-sleep 8
 
 echo "==> Verifying"
 FAILED=0
@@ -39,9 +38,29 @@ for svc in eldiancore-api eldiancore-web; do
   fi
 done
 
-CODE=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8001/health || echo 000)
-echo "    backend health: $CODE"
+# The API needs ~15s on a cold start: DNS resolution plus the first MongoDB
+# Atlas connection. A fixed sleep guesses wrong and reports a false failure on
+# a backend that came up fine, so poll until it answers instead.
+# `curl ... || echo 000` would APPEND to curl's own output on failure (giving
+# the "000000" that looked like a broken status code), so -w is used alone and
+# a non-zero exit is swallowed with `|| true`.
+CODE=000
+for i in $(seq 1 30); do
+  CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 http://127.0.0.1:8001/health || true)
+  [ -z "$CODE" ] && CODE=000
+  [ "$CODE" = "200" ] && break
+  sleep 2
+done
+echo "    backend health: $CODE (after $((i * 2))s)"
 [ "$CODE" = "200" ] || FAILED=1
+
+# The existing production app must be untouched by our deploy. Checking it here
+# means a mistake surfaces now rather than when a customer finds it.
+EXISTING=$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 https://scan.orb-itworks.com || true)
+echo "    existing site (scan.orb-itworks.com): ${EXISTING:-000}"
+if [ "${EXISTING:-000}" != "200" ]; then
+  echo "    WARNING: the pre-existing app is not returning 200 — investigate before continuing."
+fi
 
 if [ "$FAILED" -ne 0 ]; then
   echo "==> DEPLOY FAILED — see errors above"
