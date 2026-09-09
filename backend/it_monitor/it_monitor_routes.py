@@ -55,11 +55,11 @@ def _fallback_diagnosis(components: dict) -> str:
     if c["mongodb"]["status"] == "fail":
         lines.append("• The database isn't responding — check that your database service is running and its connection string is correct.")
     if c["smtp"]["status"] == "fail":
-        lines.append("• Email sending failed to sign in — your Gmail app password may be wrong or expired; generate a new one in Settings → Email Sending.")
+        lines.append("• Email sending could not sign in — check the address and password for your mail provider in Settings → Email Sending. If they are correct, the mail server may be temporarily refusing connections.")
     elif c["smtp"]["status"] == "unconfigured":
-        lines.append("• Email sending isn't set up yet — add your Gmail address + app password in Settings.")
+        lines.append("• Email sending isn't set up yet — add your mailbox address + password in Settings.")
     if c["imap"]["status"] == "fail":
-        lines.append("• Reading replies failed to sign in — refresh the Gmail app password for the inbox in Settings → Email Inbox.")
+        lines.append("• Reading replies could not sign in — check the inbox address and password in Settings → Email Inbox. Transient IMAP errors also show here and usually clear on the next check.")
     elif c["imap"]["status"] == "unconfigured":
         lines.append("• Reading replies isn't set up yet — add the inbox credentials in Settings.")
     for a in c.get("agents", []):

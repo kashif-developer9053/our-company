@@ -1415,6 +1415,13 @@ async def run_reply_check() -> dict:
             if result.get("kind") == "no_creds":
                 _set_status("idle", "")  # not configured yet — not an error state
                 return {"ok": False, "error": result["error"]}
+            if result.get("kind") == "imap_temp":
+                # A server hiccup is not a broken agent. The reply-check loop
+                # runs every 12 minutes, so parking in "error" until a human
+                # intervenes over one failed lookup is wrong — it just retries.
+                log.warning("Inbox check failed, will retry next cycle: %s", result["error"])
+                _set_status("idle", "")
+                return {"ok": False, "error": result["error"], "transient": True}
             _set_status("error", f"Could not check inbox: {result['error']}")
             return {"ok": False, "error": result["error"]}
 

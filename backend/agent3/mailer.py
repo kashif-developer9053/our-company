@@ -198,6 +198,20 @@ def test_smtp() -> dict:
         return {"ok": False, "message": f"SMTP connection failed: {exc}"}
 
 
+# Phrases a mail server uses when the CREDENTIALS are genuinely rejected, as
+# opposed to the many transient faults imaplib reports through the same class.
+_AUTH_FAIL_MARKERS = (
+    "authentication failed", "authenticationfailed", "invalid credentials",
+    "login failed", "auth failed", "password", "not authenticated",
+    "invalid user", "no login", "authorization failed",
+)
+
+
+def _is_auth_failure(text: str) -> bool:
+    t = (text or "").lower()
+    return any(m in t for m in _AUTH_FAIL_MARKERS)
+
+
 def test_imap() -> dict:
     user, pw = _imap_creds()
     if not user or not pw:
@@ -209,8 +223,12 @@ def test_imap() -> dict:
         typ, folders = m.list()
         m.logout()
         return {"ok": True, "message": f"IMAP connection + auth OK ({len(folders or [])} folders)."}
-    except imaplib.IMAP4.error:
-        return {"ok": False, "message": "IMAP auth failed — check the email + app password."}
+    except imaplib.IMAP4.error as exc:
+        if _is_auth_failure(str(exc)):
+            return {"ok": False,
+                    "message": f"IMAP sign-in rejected — check the email + password. ({exc})"}
+        return {"ok": False,
+                "message": f"IMAP server error (usually temporary, try again): {exc}"}
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "message": f"IMAP connection failed: {exc}"}
 
@@ -422,6 +440,15 @@ def fetch_replies(since_days: int = 14) -> dict:
         m.logout()
         return {"ok": True, "replies": replies}
     except imaplib.IMAP4.error as exc:
-        return {"ok": False, "error": f"IMAP auth/error: {exc}", "kind": "imap_auth", "replies": []}
+        # imaplib raises this one class for EVERYTHING: bad credentials, a
+        # dropped connection, a server-side lookup failure. Reporting all of
+        # them as an auth failure sent people off to regenerate a password that
+        # was never wrong. Only treat it as auth when the server actually says so.
+        text = str(exc)
+        if _is_auth_failure(text):
+            return {"ok": False, "error": f"IMAP sign-in rejected: {text}",
+                    "kind": "imap_auth", "replies": []}
+        return {"ok": False, "error": f"IMAP server error (usually temporary): {text}",
+                "kind": "imap_temp", "replies": []}
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "error": f"Could not check inbox: {exc}", "kind": "imap_error", "replies": []}
