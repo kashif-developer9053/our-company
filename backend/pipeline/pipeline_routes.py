@@ -14,9 +14,12 @@ from datetime import datetime, timezone
 from fastapi import APIRouter
 
 from agent1.contact_enrichment import enrich_lead_emails
+from agent1.lead_harvester import has_real_contact
 from agent1.scraper import scrape_google_maps
 from agent1.site_auditor import audit_leads
-from agent1.website_miner import mine_business_websites
+from agent1.website_miner import (_excluded_discovery_url, _looks_like_non_business,
+                                  mine_business_websites)
+from agent2.icp import classify as icp_classify
 from agent2.verifier import verify_and_store
 from shared import notifications
 from shared.database import get_db
@@ -138,12 +141,43 @@ async def run_lead_pipeline(record: dict) -> None:
         except Exception as exc:  # noqa: BLE001
             log.error("Site audit failed (isolated): %s", exc)
 
+        # ---- Agent 1e: the SAME contact gate the manual lead hunt applies ----
+        # This pipeline previously had no contact gate at all, so guessed
+        # info@ addresses and non-businesses (Q&A sites, SaaS support pages)
+        # reached the approval queue even after the hunt path was tightened.
+        # Both paths must agree, or fixing one just moves the problem.
+        rejected_no_contact = 0
+        rejected_not_business = 0
+        try:
+            keep = []
+            for lead in raw:
+                name = str(lead.get("business_name") or "")
+                site = str(lead.get("website") or "")
+                if _looks_like_non_business(name) or (site and _excluded_discovery_url(site)):
+                    rejected_not_business += 1
+                    continue
+                # Competitors and SaaS vendors: same verdict the manual hunt uses.
+                if icp_classify(lead)[0] != "keep":
+                    rejected_not_business += 1
+                    continue
+                if not has_real_contact(lead)[0]:
+                    rejected_no_contact += 1
+                    continue
+                keep.append(lead)
+            log.info("Contact gate kept %d of %d (%d no verified contact, %d not a business)",
+                     len(keep), len(raw), rejected_no_contact, rejected_not_business)
+            raw = keep
+        except Exception as exc:  # noqa: BLE001
+            log.error("Contact gate failed (isolated): %s", exc)
+
         _set_agent("agent1", "idle", "")
 
         # ---- Agent 2: verify (deterministic; blocking I/O -> threadpool) ----
         _set_agent("agent2", "working", f"Verifying {len(raw)} leads")
         summary = await asyncio.to_thread(verify_and_store, raw, niche_name, country, city, run_id)
         summary["rejected_good_site"] = rejected_good_site
+        summary["rejected_no_contact"] = rejected_no_contact
+        summary["rejected_not_business"] = rejected_not_business
         _set_agent("agent2", "idle", "")
 
         r = summary["reasons"]
@@ -151,7 +185,8 @@ async def run_lead_pipeline(record: dict) -> None:
             f"Lead generation complete for {niche_name} in {city or country}: "
             f"{summary['found']} businesses found, {summary['verified']} verified and awaiting your "
             f"approval, {summary['rejected']} rejected ({r.get('duplicate', 0)} duplicates, "
-            f"{r.get('no_contact', 0)} no contact method available)."
+            f"{r.get('no_contact', 0) + rejected_no_contact} no verified contact, "
+            f"{rejected_not_business} not real businesses)."
         )
         _finish(run_id, "complete", msg, summary)
 

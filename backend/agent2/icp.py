@@ -50,6 +50,29 @@ _BLOCKED_RE = re.compile("|".join(BLOCKED_PATTERNS), re.I)
 # Placeholder/lorem junk that means the scrape produced garbage.
 _JUNK_RE = re.compile(r"excepteur|lorem ipsum|dolor sit|consectetur", re.I)
 
+# Known software/SaaS/data vendors. Their names carry no industry word, so the
+# patterns above cannot catch them: "Skrapp.io" and "Quicken Help" read like any
+# other business until you look at the domain. These are global products, never
+# a local prospect, and several are outright competitors in lead generation.
+_VENDOR_DOMAINS = {
+    "skrapp.io", "prospeo.io", "hunter.io", "snov.io", "apollo.io", "lusha.com",
+    "rocketreach.co", "zoominfo.com", "crunchbase.com", "datanyze.com",
+    "signalhire.com", "contactout.com", "leadiq.com", "clearbit.com",
+    "quicken.com", "intuit.com", "salesforce.com", "hubspot.com", "zoho.com",
+    "freshworks.com", "pipedrive.com", "monday.com", "notion.so", "slack.com",
+    "atlassian.com", "zendesk.com", "shopify.com", "wix.com", "squarespace.com",
+    "godaddy.com", "wordpress.com", "cloudflare.com", "stackexchange.com",
+    "stackoverflow.com", "dynamics.com", "microsoft.com", "oracle.com", "sap.com",
+}
+
+
+def _domain_of(lead: dict) -> str:
+    site = str(lead.get("website") or "").strip().lower()
+    if not site:
+        return ""
+    host = site.split("//")[-1].split("/")[0]
+    return host[4:] if host.startswith("www.") else host
+
 
 def classify(lead: dict) -> tuple[str, str]:
     """Return (verdict, reason). verdict is one of keep|competitor|blocked|junk."""
@@ -67,6 +90,14 @@ def classify(lead: dict) -> tuple[str, str]:
     # Only the NAME implicates a competitor. A niche of "ERP for manufacturers"
     # is a search term describing who we want to reach, not the lead itself —
     # matching on it rejected exactly the manufacturers we were looking for.
+    # Domain is the reliable signal for product companies: the name gives
+    # nothing away, but nobody sells a local website rebuild to skrapp.io.
+    domain = _domain_of(lead)
+    if domain:
+        for vendor in _VENDOR_DOMAINS:
+            if domain == vendor or domain.endswith(f".{vendor}"):
+                return "blocked", f"a software/SaaS vendor ({vendor}), not a local prospect"
+
     m = _COMPETITOR_RE.search(name)
     if m:
         return "competitor", f"appears to sell IT/web services ({m.group(0).strip()})"
