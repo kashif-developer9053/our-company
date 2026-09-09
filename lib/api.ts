@@ -353,6 +353,22 @@ export const draftFollowups = (body: { count?: number; dry_run?: boolean }) =>
   req<{ ok: boolean; batch_id?: string; queued?: number; drafted?: number; message?: string }>(
     "/agent3/followups/draft", { method: "POST", body: JSON.stringify(body) });
 
+// ---- deliverability (bounce tracking + suppression) ------------------------
+// Bounce rate is what decides whether the sending domain survives. Providers
+// start filtering a domain sustaining more than ~3-5% hard bounces.
+export interface Deliverability {
+  days: number; events: Record<string, number>; delivered: number;
+  hard_bounces: number; soft_bounces: number; bounce_rate_pct: number;
+  suppressed_total: number; safe_to_scale: boolean;
+}
+export const getDeliverability = (days = 30) =>
+  req<{ ok: boolean } & Deliverability>(`/agent3/deliverability?days=${days}`);
+export const getWebhookUrl = () =>
+  req<{ ok: boolean; path: string }>("/agent3/webhook-url");
+export const verifyEmails = (body: { limit?: number; only_guessed?: boolean }) =>
+  req<{ ok: boolean; checked: number; results?: Record<string, number>; message?: string }>(
+    "/agent3/verify-emails", { method: "POST", body: JSON.stringify(body) });
+
 // ---- mailbox (Gmail-style folder view of outreach) ------------------------
 export interface MailItem {
   id: string; kind: "outbound" | "inbound"; business_name: string; to_email: string;

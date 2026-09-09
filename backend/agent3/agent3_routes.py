@@ -28,6 +28,9 @@ from shared.settings_store import get_config, get_icp
 
 from .email_designer import render_email_html, render_email_lite
 from .followup import ANGLE_BRIEF as FOLLOWUP_ANGLE_BRIEF
+from .suppression import is_suppressed, record_event, suppress as suppress_addr
+from .suppression import stats as suppression_stats
+from .verify_email import verify as verify_address
 from .followup import due_leads, next_step_due, sequence_state
 from .mailer import fetch_replies, outbound_content_issues, send_email
 
@@ -664,6 +667,110 @@ async def draft_batch(body: DraftBatchBody):
     return {"ok": True, "batch_id": batch_id, "drafted": drafted, "failed": failed}
 
 
+# --- deliverability: bounces, complaints, suppression -----------------------
+
+# Brevo cannot send an auth header, so the webhook cannot live on `router`
+# (which requires a logged-in user). It gets its own router, mounted without
+# the auth dependency, and authenticates by a secret embedded in the path.
+# The secret is generated once and stored in config; without it the endpoint
+# is a 404, so the URL itself is the credential and must not be shared.
+webhook_router = APIRouter(prefix="/hooks", tags=["webhooks"])
+
+
+def _webhook_secret() -> str:
+    """Stable per-install secret for the webhook URL (created on first use)."""
+    cfg = get_db()["config"]
+    doc = cfg.find_one({"_id": "webhook"})
+    if not doc or not doc.get("secret"):
+        secret = _uuid.uuid4().hex
+        cfg.update_one({"_id": "webhook"}, {"$set": {"secret": secret}}, upsert=True)
+        return secret
+    return str(doc["secret"])
+
+
+@webhook_router.post("/brevo/{secret}")
+async def brevo_webhook(secret: str, payload: dict):
+    """Brevo delivery events (hard bounce, spam complaint, unsubscribe).
+
+    Unauthenticated by necessity and deliberately forgiving: Brevo retries on
+    any non-2xx, so this always returns 200. The payload is untrusted network
+    input — it is only used to suppress an address and append to a log,
+    never executed and never used for a lookup beyond an exact email match.
+    """
+    # compare_digest avoids leaking the secret through response timing.
+    import hmac
+    if not hmac.compare_digest(secret, _webhook_secret()):
+        raise HTTPException(status_code=404, detail="Not found")
+    try:
+        event = str(payload.get("event") or "").strip()
+        email = str(payload.get("email") or "").strip().lower()
+        detail = str(payload.get("reason") or payload.get("subject") or "")[:300]
+        msg_id = str(payload.get("message-id") or payload.get("messageId") or "")[:200]
+        if not email or "@" not in email or not event:
+            return {"ok": True, "ignored": "missing email or event"}
+        res = record_event(email, event, detail, msg_id)
+        log.info("Brevo webhook: %s for %s (suppressed=%s)", event, email, res.get("suppressed"))
+        return {"ok": True, **res}
+    except Exception as exc:  # noqa: BLE001
+        log.error("Brevo webhook error (isolated): %s", exc)
+        return {"ok": False, "error": "logged"}
+
+
+@router.get("/webhook-url")
+@safe_endpoint("agent3")
+async def webhook_url():
+    """The URL to paste into Brevo. Shown once in Settings; treat it as a secret."""
+    return {"ok": True, "path": f"/api/agent3/hooks/brevo/{_webhook_secret()}"}
+
+
+@router.get("/deliverability")
+@safe_endpoint("agent3")
+async def deliverability(days: int = 30):
+    """Bounce rate and suppression totals — the numbers that say whether it
+    is safe to increase sending volume."""
+    return {"ok": True, **suppression_stats(days)}
+
+
+class VerifyBody(BaseModel):
+    limit: int = 100
+    only_guessed: bool = True
+
+
+@router.post("/verify-emails")
+@safe_endpoint("agent3")
+async def verify_emails(body: VerifyBody):
+    """Check addresses before they are ever mailed.
+
+    Aimed at the guessed `info@domain` addresses the verifier invents when it
+    finds nothing better: those are the ones that bounce, and bounces are what
+    cost us the sending domain.
+    """
+    q: dict = {"email": {"$nin": ["", None]}, "email_verify.status": {"$exists": False}}
+    if body.only_guessed:
+        q["email_confidence"] = "guessed"
+    leads = list(_leads().find(q).limit(max(1, min(body.limit, 500))))
+    if not leads:
+        return {"ok": True, "checked": 0, "message": "Nothing left to verify."}
+
+    counts: dict[str, int] = {}
+    for lead in leads:
+        addr = (lead.get("email") or "").strip()
+        res = await asyncio.to_thread(verify_address, addr)
+        counts[res["status"]] = counts.get(res["status"], 0) + 1
+        update: dict = {"email_verify": res}
+        # An address the receiving server refuses will hard-bounce. Suppress it
+        # now rather than learning the expensive way.
+        if res["status"] == "invalid":
+            update["status"] = "undeliverable"
+            update["followup_opted_out"] = True
+            update["last_action"] = f"Email invalid: {res['reason']}"
+            update["last_action_timestamp"] = _now()
+            suppress_addr(addr, f"verified invalid: {res['reason']}", source="pre_send_check")
+        _leads().update_one({"id": lead["id"]}, {"$set": update})
+
+    return {"ok": True, "checked": len(leads), "results": counts}
+
+
 class FollowupBody(BaseModel):
     count: int = 20
     dry_run: bool = False
@@ -1159,6 +1266,19 @@ async def _send_approved(draft_ids: list[str]) -> None:
             if remaining <= 0:
                 log.info("Daily cap reached — %d drafts stay approved for tomorrow.", len(draft_ids) - sent)
                 break
+            # Never contact a suppressed address. A hard bounce or complaint
+            # already told us this one damages the sending domain.
+            blocked, why = is_suppressed(d.get("to_email", ""))
+            if blocked:
+                _drafts().update_one({"id": did}, {"$set": {
+                    "status": "failed", "error": f"Not sent — {why}"}})
+                _leads().update_one({"id": d.get("lead_id")}, {"$set": {
+                    "followup_opted_out": True,
+                    "last_action": f"Suppressed: {why}",
+                    "last_action_timestamp": _now()}})
+                log.info("Skipped suppressed address %s (%s)", d.get("to_email", ""), why)
+                continue
+
             _set_status("working", f"Sending approved email {i + 1} of {len(draft_ids)}")
             res = await asyncio.to_thread(send_email, d.get("to_email", ""), d.get("subject", ""),
                                           d.get("body", ""), d.get("html", ""))

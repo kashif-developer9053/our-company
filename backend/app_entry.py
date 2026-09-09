@@ -44,6 +44,7 @@ from fastapi.middleware.gzip import GZipMiddleware  # noqa: E402
 from agent1.agent1_routes import router as agent1_router  # noqa: E402
 from agent2.agent2_routes import router as agent2_router  # noqa: E402
 from agent3.agent3_routes import router as agent3_router, run_reply_check  # noqa: E402
+from agent3.agent3_routes import webhook_router as agent3_webhook_router  # noqa: E402
 from agents.agent_registry import router as agents_router, seed_defaults  # noqa: E402
 from auth.auth_routes import router as auth_router  # noqa: E402
 from auth.deps import get_current_user, require_admin  # noqa: E402
@@ -181,6 +182,10 @@ app.include_router(supervisor_router, dependencies=USER)
 app.include_router(agent1_router, dependencies=USER)
 app.include_router(agent2_router, dependencies=USER)
 app.include_router(agent3_router, dependencies=USER)
+# Delivery webhooks are called by Brevo, which cannot present a login, so this
+# router is mounted WITHOUT the user guard. It authenticates via a secret in
+# the URL path instead (see agent3_routes._webhook_secret).
+app.include_router(agent3_webhook_router, prefix="/agent3")
 app.include_router(pipeline_router, dependencies=USER)
 app.include_router(notifications_router, dependencies=USER)
 app.include_router(it_router, dependencies=USER)

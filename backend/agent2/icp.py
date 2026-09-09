@@ -81,7 +81,9 @@ def classify(lead: dict) -> tuple[str, str]:
 def score(lead: dict, icp: dict | None = None) -> tuple[int, list[str]]:
     """Return (score, reasons). Higher = better prospect."""
     icp = icp or {}
-    pts = 50
+    # Starts low on purpose: the pitch strength below is what should
+    # separate leads, and a high base clips everything at 100.
+    pts = 20
     why: list[str] = []
 
     # Reachability. An unreachable lead is worth nothing regardless of fit.
@@ -96,22 +98,36 @@ def score(lead: dict, icp: dict | None = None) -> tuple[int, list[str]]:
     if (lead.get("phone") or "").strip():
         pts += 8; why.append("phone available")
 
-    # Opportunity: a broken/absent site is the whole pitch.
+    # Intent: how strong is the pitch, really? Not every finding is equal.
+    # "No WhatsApp button" is our single most common finding (90 leads) and is
+    # barely a problem; "no website at all" is the strongest pitch we can have.
+    # Counting findings therefore ranks the queue almost backwards — weight by
+    # what the problem actually costs the business instead.
     audit = lead.get("site_audit") or {}
     findings = audit.get("findings") or []
-    serious = sum(1 for f in findings if f.get("severity") in ("critical", "high"))
+    codes = {f.get("code", "") for f in findings}
+
     if not lead.get("website"):
-        pts += 20; why.append("no website at all — strongest pitch")
+        pts += 25; why.append("no website at all — strongest possible pitch")
+    elif codes & {"site_unreachable", "http_error"}:
+        pts += 22; why.append("their website is down or erroring")
     elif not lead.get("has_working_website"):
-        pts += 15; why.append("website does not load")
-    elif serious >= 3:
-        pts += 14; why.append(f"{serious} serious website problems")
-    elif serious >= 1:
-        pts += 8; why.append(f"{serious} website problem(s)")
-    elif findings:
-        pts += 3; why.append("minor website problems")
+        pts += 18; why.append("website does not load")
     else:
-        pts -= 10; why.append("website looks healthy — weak pitch")
+        # Tiered by business impact, highest tier wins.
+        HOT = {"no_contact_route", "no_contact_form", "very_slow", "not_mobile_friendly", "no_https"}
+        WARM = {"slow", "no_title", "no_h1", "no_meta_description", "outdated_cms",
+                "legacy_html", "flash_content", "table_layout"}
+        COLD = {"no_whatsapp", "no_analytics", "no_open_graph", "no_structured_data",
+                "images_missing_alt", "weak_title"}
+        if codes & HOT:
+            pts += 16; why.append("losing enquiries directly — urgent, easy to sell")
+        elif codes & WARM:
+            pts += 9; why.append("visibly dated or hard to find in search")
+        elif codes & COLD:
+            pts += 2; why.append("only minor polish issues — weak pitch")
+        else:
+            pts -= 12; why.append("website looks healthy — nothing to sell")
 
     # Focus: reward the niches and cities we have decided to win.
     target_niches = [x.lower() for x in (icp.get("target_niches") or [])]
