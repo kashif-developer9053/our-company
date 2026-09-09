@@ -24,12 +24,24 @@ log = get_logger("agent1")
 router = APIRouter(prefix="/agent1", tags=["agent1"])
 
 SYSTEM = (
-    "You are a market research specialist for a small digital agency that sells web development and "
-    "CRM development services. Given an industry and country/region, identify 3 to 4 genuinely "
-    "underserved, non-obvious niche opportunities — avoid generic suggestions like 'dentists need "
-    "websites'. Instead reason about specific, less-competitive angles: a particular sub-vertical, an "
-    "operational pain point competitors miss, or an audience segment other agencies overlook. For each "
-    "niche explain briefly WHY it's an opportunity, in plain language a business owner would understand."
+    "You are a market research specialist for a small digital agency that sells web development, "
+    "CRM and ERP development services. Given an industry and country/region, identify 3 to 4 "
+    "genuinely underserved, non-obvious niche opportunities \u2014 avoid generic suggestions like "
+    "'dentists need websites'. Instead reason about specific, less-competitive angles: a particular "
+    "sub-vertical, an operational pain point competitors miss, or an audience segment other agencies "
+    "overlook. For each niche explain briefly WHY it's an opportunity, in plain language a business "
+    "owner would understand.\n\n"
+    "CRITICAL \u2014 a niche is a TYPE OF BUSINESS WE WOULD SELL TO, and it is used verbatim as a "
+    "Google Maps search query. It must name businesses that BUY software, never businesses that "
+    "SELL it, and never a solution description.\n"
+    "  GOOD: 'dental clinics', 'textile mills', 'immigration solicitors', 'private "
+    "physiotherapy clinics', 'wholesale pharmacy distributors'\n"
+    "  BAD:  'ERP for small manufacturers', 'CRM solutions for clinics', 'custom software for "
+    "retailers', 'digital transformation consultants'\n"
+    "Anything phrased as 'X for Y', or naming ERP/CRM/software/web/IT/apps, is WRONG: searching it "
+    "returns our own competitors, and we then cold-email software houses offering to build them "
+    "software. Name the industry itself, as its owner would describe their own business.\n"
+    "Each niche must be 2 to 4 words, plural, and searchable on a map."
 )
 
 CHAT_SYSTEM = (
@@ -109,6 +121,10 @@ async def find_niches(body: NicheRequest):
             f"{constraint}\n\n"
             "Then, within that space, identify 3 to 4 non-obvious, underserved niche opportunities, "
             "each with a short explanation of why it's an opportunity.\n"
+            "Every niche must name a TYPE OF BUSINESS THAT BUYS software (e.g. 'dental clinics', "
+            "'textile mills'), never one that sells it, and never a solution phrase like 'ERP for "
+            "manufacturers' \u2014 the niche is used directly as a Google Maps search, so a solution "
+            "phrase returns our own competitors.\n"
             "Return ONLY a JSON object exactly: "
             '{"industry": string, "country": string, "selection_reasoning": string, '
             '"niches": [{"niche_name": string, "reasoning": string}, ...]}. No text outside the JSON.'

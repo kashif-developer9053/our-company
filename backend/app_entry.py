@@ -97,6 +97,38 @@ async def _health_check_loop():
         await asyncio.sleep(180)  # every 3 minutes
 
 
+async def _followup_loop():
+    """Draft follow-ups for leads that never replied, once every few hours.
+
+    Drafting is the automated part; sending still needs approval. This exists
+    because 30 of the first 37 cold emails never got a follow-up, and most cold
+    outreach replies arrive on the second, third or fourth touch.
+    """
+    import asyncio
+    from datetime import datetime, timezone
+    # Give the app time to settle before the first pass.
+    await asyncio.sleep(300)
+    while True:
+        try:
+            from agent3.agent3_routes import _draft_followups_bg, _drafts
+            from agent3.followup import due_leads
+            from shared.database import get_db as _gdb
+
+            # Do not pile drafts on top of an unreviewed queue — a backlog the
+            # CEO has not approved means writing more helps nobody.
+            pending = _drafts().count_documents({"status": "pending"})
+            if pending >= 40:
+                log.info("Follow-up pass skipped: %d drafts already pending review.", pending)
+            else:
+                targets = due_leads(_gdb()["leads"], limit=min(20, 40 - pending))
+                if targets:
+                    batch = f"FU-AUTO-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M')}"
+                    await _draft_followups_bg(targets, batch)
+        except Exception as exc:  # noqa: BLE001
+            log.error("Follow-up loop error (isolated): %s", exc)
+        await asyncio.sleep(6 * 3600)  # every 6 hours
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     import asyncio
@@ -106,6 +138,7 @@ async def lifespan(app: FastAPI):
     seed_instructions()
     task = asyncio.create_task(_reply_check_loop())
     health_task = asyncio.create_task(_health_check_loop())
+    followup_task = asyncio.create_task(_followup_loop())
     log.info(
         "Backend ready | storage=%s | encryption_secret_set=%s",
         backend_name(),
@@ -114,6 +147,7 @@ async def lifespan(app: FastAPI):
     yield
     task.cancel()
     health_task.cancel()
+    followup_task.cancel()
 
 
 app = FastAPI(title="AI Agency Virtual Office — Backend", version="2.0", lifespan=lifespan)

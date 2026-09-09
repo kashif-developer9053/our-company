@@ -17,8 +17,10 @@ from urllib.parse import urlparse
 
 import httpx
 
+from agent2.icp import qualify
 from shared.database import get_db
 from shared.logger import get_logger
+from shared.settings_store import get_icp
 
 log = get_logger("agent2")
 
@@ -106,7 +108,9 @@ def verify_and_store(raw_leads: list[dict], niche: str, country: str, city: str,
     """
     col = _leads()
     verified = 0
-    reasons = {"duplicate": 0, "invalid_phone": 0, "no_contact": 0}
+    reasons = {"duplicate": 0, "invalid_phone": 0, "no_contact": 0,
+               "competitor": 0, "blocked": 0, "junk": 0}
+    icp = get_icp()
 
     for raw in raw_leads:
         try:
@@ -119,26 +123,41 @@ def verify_and_store(raw_leads: list[dict], niche: str, country: str, city: str,
             phone_ok = _valid_phone(phone_raw)
             phone = phone_raw if phone_ok else ""
 
-            # 1) Duplicate check.
+            # 1) ICP gate. Cheapest check and the one that prevents the most
+            #    damage: never pitch web/ERP work to a web/ERP company.
+            verdict, why = _icp_verdict(raw, name, niche, icp)
+            if verdict != "keep":
+                _store_rejected(raw, niche, country, city, verdict, why)
+                reasons[verdict] = reasons.get(verdict, 0) + 1
+                continue
+
+            # 2) Duplicate check.
             if _is_duplicate(name, phone, domain):
                 _store_rejected(raw, niche, country, city, "duplicate")
                 reasons["duplicate"] += 1
                 continue
 
-            # 2) Phone validity (informational — only matters for contactability).
+            # 3) Phone validity (informational — only matters for contactability).
             if phone_raw and not phone_ok:
                 reasons["invalid_phone"] += 1  # counted, but not an auto-reject on its own
 
-            # 3) Website liveness = a flag, never a rejection reason.
+            # 4) Website liveness = a flag, never a rejection reason.
             has_site = _website_loads(website) if website else False
-            # 4) Email (found / guessed / none).
+            # 5) Email (found / guessed / none).
             email, email_conf = _email_for(raw, domain)
 
-            # 5) No working contact method at all -> reject.
+            # 6) No working contact method at all -> reject.
             if not phone and email_conf == "none":
                 _store_rejected(raw, niche, country, city, "no_contact")
                 reasons["no_contact"] += 1
                 continue
+
+            # Fit score ranks the CEO review queue: best prospects first,
+            # instead of whatever happened to be scraped first.
+            _fit = qualify({**raw, "business_name": name, "niche": niche, "city": city,
+                            "email": email, "email_confidence": email_conf,
+                            "phone": phone, "website": website,
+                            "has_working_website": has_site}, icp)
 
             col.insert_one({
                 "id": f"L-{uuid.uuid4().hex[:6].upper()}",
@@ -156,6 +175,8 @@ def verify_and_store(raw_leads: list[dict], niche: str, country: str, city: str,
                 # WHY this lead was collected — evidence-based, from the site audit.
                 "collection_reason": raw.get("collection_reason", ""),
                 "opportunity_score": raw.get("opportunity_score", 0),
+                "fit_score": _fit.get("fit_score", 0),
+                "fit_reasons": _fit.get("fit_reasons", []),
                 "site_audit": raw.get("site_audit", {}),
                 "pitch_points": raw.get("pitch_points", []),
                 "last_action": "Verified by Agent 2 — awaiting CEO approval",
@@ -169,12 +190,19 @@ def verify_and_store(raw_leads: list[dict], niche: str, country: str, city: str,
     return {
         "found": len(raw_leads),
         "verified": verified,
-        "rejected": reasons["duplicate"] + reasons["no_contact"],
+        "rejected": sum(v for k, v in reasons.items() if k != "invalid_phone"),
         "reasons": reasons,
     }
 
 
-def _store_rejected(raw: dict, niche: str, country: str, city: str, reason: str) -> None:
+def _icp_verdict(raw: dict, name: str, niche: str, icp: dict) -> tuple[str, str]:
+    """Competitor / blocked / junk gate. Returns (verdict, human reason)."""
+    res = qualify({**raw, "business_name": name, "niche": niche}, icp)
+    return res["verdict"], res.get("reject_reason", "")
+
+
+def _store_rejected(raw: dict, niche: str, country: str, city: str,
+                    reason: str, detail: str = "") -> None:
     _leads().insert_one({
         "id": f"R-{uuid.uuid4().hex[:6].upper()}",
         "business_name": (raw.get("business_name") or "").strip(),
@@ -184,8 +212,9 @@ def _store_rejected(raw: dict, niche: str, country: str, city: str, reason: str)
         "website": (raw.get("website") or "").strip(),
         "status": "rejected",
         "rejection_reason": reason,
+        "rejection_detail": detail,
         "source": "agent1_scrape",
-        "last_action": f"Rejected by Agent 2: {reason}",
+        "last_action": f"Rejected by Agent 2: {reason}" + (f" — {detail}" if detail else ""),
         "last_action_timestamp": _now(),
         "created_at": _now(),
     })

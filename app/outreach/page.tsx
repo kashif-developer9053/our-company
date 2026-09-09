@@ -5,6 +5,7 @@ import * as api from "@/lib/api";
 import type { ApiLead } from "@/lib/api";
 import RepliesReview from "@/components/dashboard/RepliesReview";
 import Mailbox from "@/components/ui/Mailbox";
+import FollowupPanel from "@/components/ui/FollowupPanel";
 
 // Everything email lives here — kept OUT of the CRM, which is about the leads
 // themselves. This page is the outreach cockpit: send, read replies, and see the
@@ -68,6 +69,8 @@ export default function OutreachPage() {
         <div className="stat-card"><div className="stat-value">{stats.replied}</div><div className="stat-label">Replies received</div></div>
         <div className="stat-card"><div className="stat-value">{stats.interested}</div><div className="stat-label">Interested — needs you</div></div>
       </div>
+
+      <FollowupPanel />
 
       <Mailbox onChanged={load} />
       <RepliesReview onChanged={load} />

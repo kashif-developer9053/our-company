@@ -1313,3 +1313,131 @@ body {
   display: inline-block; width: 7px; height: 7px; border-radius: 50%;
   background: #4aa3ff; margin-right: 7px; vertical-align: middle;
 }
+
+/* ============================================================
+   FOLLOW-UP QUEUE (Outreach page)
+   Leads emailed once and never chased. Angle colours are meant to
+   read at a glance: a breakup is the last touch, so it is the loudest.
+   ============================================================ */
+.fu-panel {
+  background: #0d1017;
+  border: 1px solid #1e2534;
+  border-radius: 12px;
+  padding: 14px 16px 16px;
+  margin-bottom: 14px;
+}
+.fu-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.fu-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #e6e6e6;
+}
+.fu-sub {
+  font-size: 11.5px;
+  color: #7c879c;
+  margin-top: 2px;
+}
+.fu-total {
+  font-size: 20px;
+  font-weight: 700;
+  color: #8fe000;
+  line-height: 1;
+}
+.fu-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 12px 0 4px;
+}
+.fu-chip {
+  font-size: 10.5px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid #2a3346;
+  color: #b8c2d4;
+  white-space: nowrap;
+}
+.fu-gentle_bump { border-color: #2f4a6d; color: #7fb2ea; }
+.fu-new_angle   { border-color: #4a4326; color: #d9c98a; }
+.fu-breakup     { border-color: #5c3030; color: #e08f8f; }
+
+.fu-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 12px 0 10px;
+  padding-top: 12px;
+  border-top: 1px solid #1a2130;
+}
+.fu-lbl {
+  font-size: 12px;
+  color: #9aa5b8;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.fu-num {
+  width: 58px;
+  background: #070a11;
+  border: 1px solid #2a3346;
+  border-radius: 6px;
+  color: #e6e6e6;
+  padding: 4px 6px;
+  font-size: 12px;
+}
+.fu-btn {
+  margin-left: auto;
+  background: #8fe000;
+  color: #0a0b0d;
+  border: 0;
+  border-radius: 7px;
+  padding: 7px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.fu-btn:disabled { opacity: 0.55; cursor: default; }
+
+.fu-list {
+  list-style: none;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.fu-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 0;
+  border-bottom: 1px solid #161c28;
+}
+.fu-item:last-child { border-bottom: 0; }
+.fu-item-main { min-width: 0; }
+.fu-biz {
+  display: block;
+  font-size: 12.5px;
+  color: #dfe4ec;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fu-meta { font-size: 11px; color: #6e7a8f; }
+.fu-item-side {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.fu-sent { font-size: 10.5px; color: #6e7a8f; }
+.fu-empty, .fu-more { font-size: 11.5px; color: #7c879c; margin-top: 10px; }
+.fu-err {
+  font-size: 11.5px; color: #e08f8f; margin-top: 10px;
+}
+.fu-msg {
+  font-size: 11.5px; color: #8fe000; margin-top: 10px;
+}

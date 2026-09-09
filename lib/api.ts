@@ -339,6 +339,20 @@ export const approveAndSendDrafts = (body: { draft_ids?: string[]; batch_id?: st
   req<{ ok: boolean; approved?: number; sent?: number; note?: string; error?: string }>(
     "/agent3/drafts/approve-send", { method: "POST", body: JSON.stringify(body) });
 
+// ---- follow-up sequencing --------------------------------------------------
+// Most cold-outreach replies arrive on the 2nd-4th touch, so this is where the
+// unreplied leads queue up. Drafting is automatic; sending still needs approval.
+export interface FollowupItem {
+  lead_id: string; business_name: string; email: string; city: string; niche: string;
+  angle: "gentle_bump" | "new_angle" | "breakup"; emails_sent: number;
+  last_sent_at: string; fit_score: number;
+}
+export const getFollowupsDue = (limit = 100) =>
+  req<{ ok: boolean; total: number; items: FollowupItem[] }>(`/agent3/followups/due?limit=${limit}`);
+export const draftFollowups = (body: { count?: number; dry_run?: boolean }) =>
+  req<{ ok: boolean; batch_id?: string; queued?: number; drafted?: number; message?: string }>(
+    "/agent3/followups/draft", { method: "POST", body: JSON.stringify(body) });
+
 // ---- mailbox (Gmail-style folder view of outreach) ------------------------
 export interface MailItem {
   id: string; kind: "outbound" | "inbound"; business_name: string; to_email: string;

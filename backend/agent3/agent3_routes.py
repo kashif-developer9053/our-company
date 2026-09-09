@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import random
 import re
+import uuid as _uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException
@@ -23,9 +24,11 @@ from shared.claude_client import call_claude
 from shared.database import get_db
 from shared.logger import get_logger
 from shared.safe_wrapper import safe_endpoint
-from shared.settings_store import get_config
+from shared.settings_store import get_config, get_icp
 
 from .email_designer import render_email_html, render_email_lite
+from .followup import ANGLE_BRIEF as FOLLOWUP_ANGLE_BRIEF
+from .followup import due_leads, next_step_due, sequence_state
 from .mailer import fetch_replies, outbound_content_issues, send_email
 
 log = get_logger("agent3")
@@ -158,6 +161,29 @@ def _parse_email(text: str) -> tuple[str, str]:
     while lines and re.match(r"^\s*(?:email|e-mail|whatsapp|phone|tel|website|web)\s*[:\-]",
                              lines[-1], re.I):
         lines.pop()
+
+    # Models often skip the valediction and simply sign their name, e.g.
+    # "Kashif Rehman — CEO". _SIGNOFF_RE only matches words like "Regards",
+    # so that slips through and the template then renders the real signature
+    # underneath it — the reader sees the sign-off twice. Drop short trailing
+    # lines that read as a name/title rather than as a sentence.
+    identity = company_profile.outreach_identity()
+    known = [x.lower() for x in (identity.get("sender_name") or "",
+                                 identity.get("company_name") or "") if x]
+    _NAME_TITLE = re.compile(r"^[A-Z][\w.'-]*(\s+[A-Z][\w.'-]*)*\s*[\u2014\u2013|,-]\s*\w")
+    while lines:
+        tail = lines[-1].strip()
+        if not tail:
+            lines.pop()
+            continue
+        if (len(tail.split()) <= 6
+                and not tail.endswith((".", "?", "!"))
+                and (any(k and k in tail.lower() for k in known)
+                     or _NAME_TITLE.match(tail))):
+            lines.pop()
+            continue
+        break
+
     return subject, "\n".join(lines).strip()
 
 
@@ -259,7 +285,8 @@ def _angle_for(lead: dict) -> str:
                 f"impact is — {main}.{extra}\n"
                 f"Open by painting that lost-customer moment in plain human language. Make it clear you "
                 f"looked at their site specifically and know what is wrong, but DO NOT name the technical "
-                f"faults, measurements or how to fix them. Close by offering to show them what you found."
+                f"faults, measurements or how to fix them. Close by offering the work — updating their "
+                f"current site or building a new one — never by offering to send them the findings."
             )
     if notes:
         return f"Their own listing/notes mention: \"{notes[:180]}\". Open by referencing that specific detail."
@@ -276,9 +303,12 @@ def _angle_for(lead: dict) -> str:
             "one operational bottleneck, named concretely.")
 
 
-async def _write_email(lead: dict) -> dict:
+async def _write_email(lead: dict, followup_angle: str = "") -> dict:
     identity = company_profile.outreach_identity()
-    angle = _angle_for(lead)
+    # A follow-up has its own brief; the first-touch angle would restate the
+    # pitch they have already ignored once.
+    angle = (FOLLOWUP_ANGLE_BRIEF.get(followup_angle) or _angle_for(lead)
+             if followup_angle else _angle_for(lead))
     avoid = _recent_openings()
     # Rotate the opening structure per lead so a batch never uses one formula.
     opening_style = _OPENING_STYLES[
@@ -327,7 +357,8 @@ async def _write_email(lead: dict) -> dict:
         "this was written for them and could not be sent to anyone else.\n"
         "4. Exactly ONE soft call to action (a question inviting a reply), not a hard sell.\n"
         "5. No attachments, no tracking language, at most one link.\n"
-        "6. End with a normal human sign-off including the real contact details above.\n"
+        "6. Do NOT write a greeting, sign-off, signature or contact details. The template renders "
+        "the real signature automatically, so anything you add there is stripped and wasted.\n"
         + f"\n\nOPENING STYLE FOR THIS EMAIL (follow it — it is different every time):\n{opening_style}\n"
         "\nSUBJECT LINE: make it specific to THIS business. Do not start with 'Enhancing', "
         "'Improving', 'Optimizing' or 'Boosting' — those are overused and look templated.\n"
@@ -631,6 +662,110 @@ async def draft_batch(body: DraftBatchBody):
             agent_id="agent3", action="drafts_pending", ref_id=batch_id,
         )
     return {"ok": True, "batch_id": batch_id, "drafted": drafted, "failed": failed}
+
+
+class FollowupBody(BaseModel):
+    count: int = 20
+    dry_run: bool = False
+
+
+@router.get("/followups/due")
+@safe_endpoint("agent3")
+async def followups_due(limit: int = 100):
+    """Who is waiting on a follow-up, and which step they are on.
+
+    Read-only: this is the screen that tells the CEO how much is sitting idle.
+    """
+    rows = []
+    for lead, angle in due_leads(_leads(), limit=limit):
+        st = sequence_state(lead)
+        rows.append({
+            "lead_id": lead.get("id"),
+            "business_name": lead.get("business_name", ""),
+            "email": lead.get("email", ""),
+            "city": lead.get("city", ""),
+            "niche": lead.get("niche", ""),
+            "angle": angle,
+            "emails_sent": st["sent_count"],
+            "last_sent_at": st["last_sent_at"].isoformat() if st["last_sent_at"] else "",
+            "fit_score": lead.get("fit_score", 0),
+        })
+    return {"ok": True, "total": len(rows), "items": rows}
+
+
+@router.post("/followups/draft")
+@safe_endpoint("agent3")
+async def draft_followups(body: FollowupBody):
+    """Write follow-up drafts for everyone whose next step is due.
+
+    Drafts only — they land in the same review queue as first-touch emails and
+    need the same approval. Nothing is sent from here.
+    """
+    targets = due_leads(_leads(), limit=max(1, min(body.count, 100)))
+    if body.dry_run:
+        return {"ok": True, "would_draft": len(targets),
+                "items": [{"business_name": l.get("business_name"), "angle": a} for l, a in targets]}
+    if not targets:
+        return {"ok": True, "drafted": 0, "message": "No follow-ups are due."}
+
+    batch_id = f"FU-{_uuid.uuid4().hex[:8].upper()}"
+    asyncio.create_task(_draft_followups_bg(targets, batch_id))
+    return {"ok": True, "batch_id": batch_id, "queued": len(targets),
+            "message": f"Writing {len(targets)} follow-ups in the background."}
+
+
+async def _draft_followups_bg(targets: list, batch_id: str) -> None:
+    """Background follow-up writer. Never raises (isolated)."""
+    drafted = 0
+    try:
+        _set_status("working", f"Writing {len(targets)} follow-ups")
+        for i, (lead, angle) in enumerate(targets, start=1):
+            _set_status("working", f"Follow-up {i} of {len(targets)}")
+            # Re-check: a reply may have landed while the batch was running.
+            fresh = _leads().find_one({"id": lead.get("id")}) or lead
+            due, _a, _why = next_step_due(fresh)
+            if not due:
+                continue
+            gen = await _write_email(fresh, followup_angle=angle)
+            if not gen["ok"]:
+                log.warning("Follow-up draft failed for %s: %s",
+                            fresh.get("business_name", ""), gen.get("error", ""))
+                continue
+            st = sequence_state(fresh)
+            _drafts().insert_one({
+                "id": f"D-{_uuid.uuid4().hex[:8].upper()}",
+                "batch_id": batch_id,
+                "lead_id": fresh["id"],
+                "business_name": fresh.get("business_name", ""),
+                "to_email": fresh.get("email", ""),
+                "subject": gen["subject"],
+                "body": gen["body"],
+                "html": gen["html"],
+                "preview_html": _preview_html(gen["html"]),
+                "spam_flags": gen.get("spam_flags", []),
+                "collection_reason": fresh.get("collection_reason", ""),
+                "opportunity_score": fresh.get("opportunity_score", 0),
+                "status": "pending",
+                "edited": False,
+                # Marks this as a sequence step, so the sender records it as a
+                # follow-up and the review screen can show which step it is.
+                "is_followup": True,
+                "followup_angle": angle,
+                "followup_step": st["sent_count"],
+                "created_at": _now(),
+            })
+            drafted += 1
+        _set_status("idle")
+        if drafted:
+            notifications.notify(
+                "approval", f"{drafted} follow-ups ready for your review",
+                "Agent 3 wrote follow-ups for leads that never replied. Approve to send.",
+                agent_id="agent3", action="drafts_pending", ref_id=batch_id,
+            )
+        log.info("Follow-up batch %s: %d drafted.", batch_id, drafted)
+    except Exception as exc:  # noqa: BLE001
+        _set_status("error", f"Follow-up batch error: {exc}")
+        log.error("Follow-up batch crashed (isolated): %s", exc)
 
 
 def _ser_draft(d: dict) -> dict:
@@ -1035,11 +1170,15 @@ async def _send_approved(draft_ids: list[str]) -> None:
                 continue
             _drafts().update_one({"id": did}, {"$set": {"status": "sent", "sent_at": _now()}})
             _leads().update_one({"id": d.get("lead_id")}, {
-                "$set": {"status": "mailed", "last_action": "Cold email sent by Agent 3",
+                "$set": {"status": "mailed",
+                         "last_action": ("Follow-up sent by Agent 3" if d.get("is_followup")
+                                         else "Cold email sent by Agent 3"),
                          "last_action_timestamp": _now()},
                 "$push": {"outreach_history": {
-                    "type": "email", "subject": d.get("subject", ""), "body": d.get("body", ""),
-                    "html": d.get("html", ""), "sent_at": _now()}},
+                    "type": "followup" if d.get("is_followup") else "email",
+                    "subject": d.get("subject", ""), "body": d.get("body", ""),
+                    "html": d.get("html", ""), "sent_at": _now(),
+                    "followup_angle": d.get("followup_angle", "")}},
             })
             _record_send()
             sent += 1
