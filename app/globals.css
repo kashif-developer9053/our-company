@@ -1520,3 +1520,11 @@ body {
   border-color: #8fe000;
   background: rgba(143, 224, 0, 0.07);
 }
+
+/* Live agent status during a lead hunt. */
+.hunt-live {
+  margin-top: 8px;
+  font-size: 11.5px;
+  color: #8fe000;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}

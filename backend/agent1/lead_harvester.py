@@ -70,6 +70,12 @@ _DEFAULT_TIME_BUDGET = 1800  # seconds; a hard ceiling on one harvest run
 # differentiated, so it is worth pushing through a few empty rounds to reach
 # them.
 _BARREN_LIMIT = 6
+
+# Businesses pulled per search round. Three filters run in series afterwards
+# (already-known, verified contact, evidenced site problems), and they multiply:
+# at 20 per round a first hunt yielded only three or four qualified leads. One
+# search returning 40 costs little more than one returning 20.
+_PER_ROUND = 40
 _AUDIT_CONCURRENCY = 12      # sites audited in parallel (each is a light HTTP GET)
 
 
@@ -188,14 +194,14 @@ async def harvest_leads(
         fresh: list[dict] = []
         # 1) Google Maps (good for phone numbers + addresses)
         try:
-            maps = await scrape_google_maps(query, max_results=20)
+            maps = await scrape_google_maps(query, max_results=_PER_ROUND)
             if maps.get("ok"):
                 fresh.extend(maps.get("leads", []))
         except Exception as exc:  # noqa: BLE001 - one source failing is survivable
             log.error("Maps round failed (isolated): %s", exc)
         # 2) Our own web crawler (good for published emails)
         try:
-            mined = await mine_business_websites(query, max_results=20)
+            mined = await mine_business_websites(query, max_results=_PER_ROUND)
             if mined.get("ok"):
                 fresh.extend(mined.get("leads", []))
         except Exception as exc:  # noqa: BLE001

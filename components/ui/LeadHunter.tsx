@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import * as api from "@/lib/api";
 import type { NextOption } from "@/lib/api";
 
@@ -24,11 +24,33 @@ export default function LeadHunter({ onDone }: { onDone?: () => void }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [result, setResult] = useState<Result | null>(null);
+  // The niche the last hunt actually ran on, so "find more" continues that
+  // one even if the input box has since been edited.
+  const [lastNiche, setLastNiche] = useState("");
+  const [live, setLive] = useState("");
+
+  // Agent 1 publishes its progress to the status board while hunting; poll it
+  // so a multi-round hunt shows what it is doing instead of a bare spinner.
+  useEffect(() => {
+    if (!busy) { setLive(""); return; }
+    let on = true;
+    const t = setInterval(async () => {
+      try {
+        const agents = await api.getAgents();
+        const a1 = agents.find((a) => a.id === "agent1");
+        if (on && a1?.task) setLive(a1.task);
+      } catch { /* status board unavailable — keep the spinner */ }
+    }, 3000);
+    return () => { on = false; clearInterval(t); };
+  }, [busy]);
 
   const run = async (opts?: { niche?: string; city?: string; country?: string; continueNiche?: boolean }) => {
     const n = (opts?.niche ?? niche).trim();
     if (!n || busy) return;
-    setBusy(true); setErr(null); setResult(null);
+    // Keep the previous result on screen while hunting. Clearing it here
+    // removed the "find more in this niche" button the moment it was
+    // pressed, and an empty hunt then left nothing to click at all.
+    setBusy(true); setErr(null);
     try {
       const r = await api.harvestLeads({
         niche: n,
@@ -38,6 +60,7 @@ export default function LeadHunter({ onDone }: { onDone?: () => void }) {
         continue_niche: opts?.continueNiche ?? false,
       });
       if (!r.ok) { setErr(r.error || "Hunt failed."); return; }
+      setLastNiche(n);
       setResult({
         found: r.found ?? 0, target: r.target ?? target, complete: !!r.complete,
         rounds: r.rounds ?? 0, examined: r.examined ?? 0, elapsed_seconds: r.elapsed_seconds ?? 0,
@@ -54,8 +77,8 @@ export default function LeadHunter({ onDone }: { onDone?: () => void }) {
   const choose = (action: string) => {
     if (action === "stop") { setResult(null); return; }
     // Keep mining the same niche, counting toward the same target.
-    if (action === "more_same_niche") { run({ continueNiche: true }); return; }
-    if (action === "widen_location") { setCity(""); run({ city: "", continueNiche: true }); return; }
+    if (action === "more_same_niche") { run({ niche: lastNiche || niche, continueNiche: true }); return; }
+    if (action === "widen_location") { setCity(""); run({ niche: lastNiche || niche, city: "", continueNiche: true }); return; }
     if (action === "different_niche") { setResult(null); setNiche(""); return; }
   };
 
@@ -87,7 +110,8 @@ export default function LeadHunter({ onDone }: { onDone?: () => void }) {
       {busy && (
         <div className="hunt-busy">
           <span className="spinner" /> Agent 1 is searching, checking contacts and auditing websites.
-          This can take several minutes for large targets — watch its status in the office.
+          This can take several minutes for large targets.
+          {live && <div className="hunt-live">{live}</div>}
         </div>
       )}
 
