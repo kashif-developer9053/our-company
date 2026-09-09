@@ -42,11 +42,34 @@ _QUERY_TEMPLATES = (
     "{niche} directory {where}",
     "small {niche} business {where}",
     "{niche} {where} about us",
-    "professional {niche} {where}",
-    "{niche} firm {where}",
+    # Maps ranks by proximity, so naming a sub-area surfaces businesses the
+    # centre-weighted searches never return. This is the highest-yield way to
+    # keep mining a niche the plain queries have exhausted.
+    "{niche} main road {where}",
+    "{niche} town centre {where}",
+    "{niche} {where} branch",
+    "new {niche} {where}",
+    "{niche} clinic {where}",
+    "private {niche} {where}",
+    "{niche} centre {where}",
+    "{niche} {where} opening hours",
+    "family {niche} {where}",
+    "{niche} specialist {where}",
+    "24 hour {niche} {where}",
+    "{niche} {where} reviews",
+    "cheap {niche} {where}",
+    "{niche} consultancy {where}",
 )
 
 _DEFAULT_TIME_BUDGET = 1800  # seconds; a hard ceiling on one harvest run
+
+# Consecutive rounds returning nothing new before we call a niche exhausted.
+# This was 3, which quit far too early: once part of a niche is collected,
+# every known business counts as "nothing new", so a niche that still had
+# plenty left looked dead. The later query templates are the most
+# differentiated, so it is worth pushing through a few empty rounds to reach
+# them.
+_BARREN_LIMIT = 6
 _AUDIT_CONCURRENCY = 12      # sites audited in parallel (each is a light HTTP GET)
 
 
@@ -168,8 +191,9 @@ async def harvest_leads(
             say(f"Round {rounds_run}: all {raw_count} results were already known — nothing new.")
             # If several rounds in a row surface nothing new, this niche/area is
             # genuinely exhausted; stop rather than burning the whole budget.
-            if barren_rounds >= 3:
-                say("Three rounds with no new businesses — this niche/area looks exhausted.")
+            if barren_rounds >= _BARREN_LIMIT:
+                say(f"{_BARREN_LIMIT} rounds with no new businesses — this niche/area looks "
+                    f"exhausted. Try widening the location or a different niche.")
                 break
             continue
         barren_rounds = 0

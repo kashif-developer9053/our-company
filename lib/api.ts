@@ -416,14 +416,26 @@ export const writeWhatsAppMessage = (lead_id: string, language: "english" | "rom
 export const updateWhatsAppLead = (id: string, body: { status?: string; remarks?: string; message?: string }) =>
   req<{ ok: boolean; lead: WhatsAppLead }>(`/agent3/whatsapp/leads/${id}`, { method: "PUT", body: JSON.stringify(body) });
 
-export interface NextOption { action: string; label: string; hint: string }
-export const harvestLeads = (body: { niche: string; city?: string; country?: string; target?: number; exclude_existing?: boolean }) =>
+export interface NextOption { action: string; label: string; hint: string; primary?: boolean }
+export const harvestLeads = (body: {
+  niche: string; city?: string; country?: string; target?: number;
+  exclude_existing?: boolean;
+  // True when continuing on the same niche: the target then counts leads
+  // already held, so a second hunt tops the pile up instead of restarting.
+  continue_niche?: boolean;
+}) =>
   req<{
     ok: boolean; batch_id?: string; added?: number; found?: number; target?: number;
     complete?: boolean; rounds?: number; examined?: number; elapsed_seconds?: number;
     rejected?: { no_contact: number; good_site: number; guessed_email_only: number };
+    already_held?: number; niche_total?: number;
     message?: string; next_options?: NextOption[]; error?: string;
   }>("/agent1/harvest-leads", { method: "POST", body: JSON.stringify(body) });
+
+export const getNicheProgress = (niche: string, city = "", country = "") =>
+  req<{ ok: boolean; niche: string; collected: number; pending_approval: number;
+        approved: number; rejected: number }>(
+    `/agent1/niche-progress?niche=${encodeURIComponent(niche)}&city=${encodeURIComponent(city)}&country=${encodeURIComponent(country)}`);
 
 export const generateLeads = (body: { niche: string; city?: string; country?: string; count?: number }) =>
   req<{ ok: boolean; added?: number; skipped?: number; no_reason?: number; dropped_no_reason?: number;

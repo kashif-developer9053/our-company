@@ -6,6 +6,7 @@ NOT trigger any scraping or lead generation — that is Phase 4.
 
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import datetime, timezone
 
@@ -227,6 +228,10 @@ class HarvestBody(BaseModel):
     country: str = ""
     target: int = 50
     exclude_existing: bool = True   # skip businesses already in the CRM
+    # True when the CEO pressed "find more in this niche". The target then
+    # counts leads ALREADY held for the niche, so a second run tops the pile up
+    # to `target` instead of trying to find `target` more from scratch.
+    continue_niche: bool = False
 
 
 @router.post("/harvest-leads")
@@ -247,6 +252,25 @@ async def harvest_leads_route(body: HarvestBody):
 
     target = max(1, min(body.target, 200))
     where = ", ".join(x for x in (body.city, body.country) if x) or "your area"
+
+    # "Find more" tops up toward the target rather than restarting from zero.
+    already = 0
+    if body.continue_niche:
+        nq: dict = {"niche": {"$regex": f"^{re.escape(body.niche)}$", "$options": "i"},
+                    "status": {"$ne": "rejected"}}
+        if body.city:
+            nq["city"] = {"$regex": f"^{re.escape(body.city)}$", "$options": "i"}
+        already = get_db()["leads"].count_documents(nq)
+        remaining = target - already
+        if remaining <= 0:
+            _set_status("idle")
+            return {"ok": True, "added": 0, "batch_id": "", "found": 0,
+                    "target": target, "already_held": already, "complete": True,
+                    "message": (f"You already have {already} leads for '{body.niche}' in {where}, "
+                                f"which meets the target of {target}. Raise the target or change "
+                                f"niche to collect more."),
+                    "next_options": _next_options(body.niche, {"complete": True})}
+        target = remaining
 
     # Don't re-collect businesses we already hold.
     exclude: set[str] = set()
@@ -293,23 +317,64 @@ async def harvest_leads_route(body: HarvestBody):
     )
     _set_status("idle")
     return {"ok": True, "batch_id": batch_id, **stored, **result,
+            "already_held": already,
+            "niche_total": already + len(leads),
             "next_options": _next_options(body.niche, result)}
 
 
+@router.get("/niche-progress")
+@safe_endpoint("agent1")
+async def niche_progress(niche: str, city: str = "", country: str = ""):
+    """How many leads we already hold for a niche, and what has been tried.
+
+    This is what makes "find more in this niche" meaningful: the target is a
+    RUNNING TOTAL across every hunt for that niche, not a per-run figure. Before
+    this, each hunt started from zero, so a niche that had already given up its
+    easy leads looked like it was only ever producing three or four.
+    """
+    q: dict = {"niche": {"$regex": f"^{re.escape(niche)}$", "$options": "i"}}
+    if city:
+        q["city"] = {"$regex": f"^{re.escape(city)}$", "$options": "i"}
+    col = get_db()["leads"]
+    total = col.count_documents(q)
+    return {
+        "ok": True,
+        "niche": niche,
+        "city": city,
+        "country": country,
+        "collected": total,
+        "pending_approval": col.count_documents({**q, "status": "pending_approval"}),
+        "approved": col.count_documents({**q, "status": {"$in": ["verified", "mailed"]}}),
+        "rejected": col.count_documents({**q, "status": "rejected"}),
+    }
+
+
 def _next_options(niche: str, result: dict) -> list[dict]:
-    """What Agent 1 offers to do next once a harvest finishes."""
+    """What Agent 1 offers to do next once a harvest finishes.
+
+    "Find more in this niche" is deliberately FIRST and always present: the
+    common case is liking a niche and wanting to keep mining it, and having to
+    re-pick a niche to do that was the single most annoying part of the flow.
+    """
+    exhausted = result.get("rejected", {}).get("exhausted") or (
+        result.get("rounds", 0) > 0 and not result.get("complete")
+        and result.get("examined", 0) > 0
+        and result.get("found", 0) == 0
+    )
     options = [
         {"action": "more_same_niche",
-         "label": f"Find more leads in '{niche}'",
-         "hint": ("There may be more to find — I'll skip everything already collected."
-                  if result.get("complete")
-                  else "I may have exhausted this niche/area, so this could return few results.")},
-        {"action": "different_niche",
-         "label": "Search a different niche",
-         "hint": "Tell me the new niche and I'll start a fresh hunt."},
+         "label": f"Find more in '{niche}'",
+         "primary": True,
+         "hint": ("I'll keep going on this niche and skip everything already collected."
+                  if not exhausted else
+                  "I found nothing new last round, so this may return little — "
+                  "widening the location usually helps more.")},
         {"action": "widen_location",
          "label": "Widen the location",
-         "hint": "Search a bigger area (whole country) for the same niche."},
+         "hint": "Same niche, bigger area — usually the best move when a city runs dry."},
+        {"action": "different_niche",
+         "label": "Change niche",
+         "hint": "Pick a different type of business and start a fresh hunt."},
         {"action": "stop",
          "label": "Stop here",
          "hint": "Review and approve what I've found."},

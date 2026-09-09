@@ -8,6 +8,9 @@ interface Result {
   found: number; target: number; complete: boolean; rounds: number; examined: number;
   elapsed_seconds: number; added: number; message: string; next_options: NextOption[];
   rejected: { no_contact: number; good_site: number; guessed_email_only: number };
+  // Running totals for the niche, so "find more" reads as progress toward the
+  // target rather than each hunt looking like it only found three or four.
+  alreadyHeld: number; nicheTotal: number;
 }
 
 // Agent 1's lead hunt: keeps searching until it has `target` leads that BOTH
@@ -22,7 +25,7 @@ export default function LeadHunter({ onDone }: { onDone?: () => void }) {
   const [err, setErr] = useState<string | null>(null);
   const [result, setResult] = useState<Result | null>(null);
 
-  const run = async (opts?: { niche?: string; city?: string; country?: string }) => {
+  const run = async (opts?: { niche?: string; city?: string; country?: string; continueNiche?: boolean }) => {
     const n = (opts?.niche ?? niche).trim();
     if (!n || busy) return;
     setBusy(true); setErr(null); setResult(null);
@@ -32,6 +35,7 @@ export default function LeadHunter({ onDone }: { onDone?: () => void }) {
         city: opts?.city ?? city.trim(),
         country: opts?.country ?? country.trim(),
         target,
+        continue_niche: opts?.continueNiche ?? false,
       });
       if (!r.ok) { setErr(r.error || "Hunt failed."); return; }
       setResult({
@@ -39,6 +43,8 @@ export default function LeadHunter({ onDone }: { onDone?: () => void }) {
         rounds: r.rounds ?? 0, examined: r.examined ?? 0, elapsed_seconds: r.elapsed_seconds ?? 0,
         added: r.added ?? 0, message: r.message ?? "", next_options: r.next_options ?? [],
         rejected: r.rejected ?? { no_contact: 0, good_site: 0, guessed_email_only: 0 },
+        alreadyHeld: r.already_held ?? 0,
+        nicheTotal: r.niche_total ?? (r.added ?? 0),
       });
       onDone?.();
     } catch (e) { setErr((e as Error).message); }
@@ -47,8 +53,9 @@ export default function LeadHunter({ onDone }: { onDone?: () => void }) {
 
   const choose = (action: string) => {
     if (action === "stop") { setResult(null); return; }
-    if (action === "more_same_niche") { run(); return; }
-    if (action === "widen_location") { setCity(""); run({ city: "" }); return; }
+    // Keep mining the same niche, counting toward the same target.
+    if (action === "more_same_niche") { run({ continueNiche: true }); return; }
+    if (action === "widen_location") { setCity(""); run({ city: "", continueNiche: true }); return; }
     if (action === "different_niche") { setResult(null); setNiche(""); return; }
   };
 
@@ -89,7 +96,10 @@ export default function LeadHunter({ onDone }: { onDone?: () => void }) {
       {result && (
         <div className="hunt-result">
           <div className={`hunt-headline ${result.complete ? "ok" : "partial"}`}>
-            {result.complete ? "✅" : "⚠"} Found {result.found} of {result.target} qualified leads
+            {result.complete ? "✅" : "⚠"} Found {result.found} qualified leads this round
+            {result.alreadyHeld > 0 && (
+              <span className="hunt-running"> · {result.nicheTotal} total for this niche</span>
+            )}
           </div>
           <p className="muted small">{result.message}</p>
           <div className="hunt-stats">
@@ -108,7 +118,9 @@ export default function LeadHunter({ onDone }: { onDone?: () => void }) {
           <div className="hunt-next">
             <div className="build-label">What should Agent 1 do next?</div>
             {result.next_options.map((o) => (
-              <button key={o.action} className="hunt-option" onClick={() => choose(o.action)} disabled={busy}>
+              <button key={o.action}
+                className={`hunt-option${o.primary ? " primary-opt" : ""}`}
+                onClick={() => choose(o.action)} disabled={busy}>
                 <span className="hunt-option-label">{o.label}</span>
                 <span className="hunt-option-hint">{o.hint}</span>
               </button>
