@@ -73,7 +73,7 @@ _LISTING_TITLE_RE = re.compile(
     r"\b(?:list of|business directory|company directory|directory of|top\s+\d+|best\s+\w+\s+companies|companies in)\b",
     re.I,
 )
-_MAX_SEARCH_RESULTS = 20
+_MAX_SEARCH_RESULTS = 45
 _MAX_PAGES_PER_SITE = 5
 _MAX_BODY_BYTES = 2_000_000
 _MAX_REDIRECTS = 4
@@ -387,7 +387,15 @@ async def discover_business_websites(
         if len(found) >= limit:
             return {"ok": True, "websites": found, "message": f"Prepared {len(found)} business websites."}
 
-    searches = (f"{query} business contact", f"{query} company email")
+    searches = (
+        f"{query} business contact",
+        f"{query} company email",
+        # Without a qualifier the engines return the businesses themselves
+        # rather than the contact-scraper directories the wording above attracts.
+        f"{query}",
+        f"{query} official website",
+        f"{query} contact us email address",
+    )
     headers = {
         "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_7_8) AppleWebKit/537.36 Chrome/128.0 Safari/537.36",
         "accept": "text/html,application/xhtml+xml",
@@ -399,11 +407,22 @@ async def discover_business_websites(
                 ("Yahoo", f"https://search.yahoo.com/search?p={quote_plus(search)}", _parse_yahoo_results),
             )
             for source_name, url, parser in sources:
-                try:
-                    response = await client.get(url)
-                    response.raise_for_status()
-                except httpx.HTTPError as exc:
-                    log.warning("%s website discovery query failed: %s", source_name, exc)
+                # These engines rate-limit and intermittently answer 5xx to the
+                # very same request. One failure used to discard that engine's
+                # whole contribution for the round, so retry once before giving up.
+                response = None
+                for attempt in (1, 2):
+                    try:
+                        response = await client.get(url)
+                        response.raise_for_status()
+                        break
+                    except httpx.HTTPError as exc:
+                        if attempt == 2:
+                            log.warning("%s discovery failed after 2 tries: %s", source_name, exc)
+                            response = None
+                        else:
+                            await asyncio.sleep(1.5)
+                if response is None:
                     continue
                 for item in parser(response.text):
                     domain = _domain(item["url"])
