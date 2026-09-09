@@ -1295,3 +1295,21 @@ body {
   .mailbox { grid-template-columns: 160px 1fr; }
   .mb-read { grid-column: 1 / -1; border-top: 1px solid #1e2534; }
 }
+
+/* ---- Mailbox campaign filters (city / industry) ---- */
+.mb-filters { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+.mb-filters .af-input {
+  width: 100%; padding: 6px 8px; font-size: 12px;
+  background: #10151f; border: 1px solid #1e2534; color: #c3ccdd; border-radius: 6px;
+}
+.mb-filters .af-input:focus { border-color: #33405c; outline: none; }
+
+/* ---- Mailbox: unread replies ---- */
+.mb-row.unread { background: #101a2b; }
+.mb-row.unread .mb-row-name { color: #ffffff; }
+.mb-row.unread .mb-row-subject { color: #e6ecf7; font-weight: 600; }
+.mb-row.unread.open { background: #16233a; }
+.mb-dot {
+  display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+  background: #4aa3ff; margin-right: 7px; vertical-align: middle;
+}

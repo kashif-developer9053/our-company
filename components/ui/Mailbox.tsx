@@ -11,6 +11,7 @@ const FOLDERS = [
   { key: "drafts", label: "Drafts", icon: "M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" },
   { key: "sent", label: "Sent", icon: "m22 2-7 20-4-9-9-4Z" },
   { key: "inbox", label: "Inbox", icon: "M22 12h-6l-2 3h-4l-2-3H2M5.5 5h13l3.5 7v6a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-6Z" },
+  { key: "archive", label: "Archive", icon: "M21 8v13H3V8M1 3h22v5H1zM10 12h4" },
   { key: "failed", label: "Failed", icon: "M12 9v4m0 4h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z" },
   { key: "rejected", label: "Discarded", icon: "M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" },
 ] as const;
@@ -44,7 +45,14 @@ export default function Mailbox({ onChanged }: { onChanged?: () => void }) {
   const [eTo, setETo] = useState(""); const [eSub, setESub] = useState(""); const [eBody, setEBody] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
+  const [replying, setReplying] = useState(false);
+  const [replyText, setReplyText] = useState("");
   const [count, setCount] = useState(10);
+  // Campaign filters: write to one city / industry at a time.
+  const [city, setCity] = useState("");
+  const [niche, setNiche] = useState("");
+  const [targets, setTargets] = useState<{ total: number; cities: api.DraftTarget[]; niches: api.DraftTarget[] }>(
+    { total: 0, cities: [], niches: [] });
 
   const load = useCallback(async (f: string) => {
     try {
@@ -56,7 +64,55 @@ export default function Mailbox({ onChanged }: { onChanged?: () => void }) {
   }, []);
   useEffect(() => { load(folder); }, [folder, load]);
 
+  const loadTargets = useCallback(async () => {
+    try {
+      const r = await api.getDraftTargets();
+      setTargets({ total: r.total, cities: r.cities, niches: r.niches });
+    } catch { /* backend down */ }
+  }, []);
+  useEffect(() => { loadTargets(); }, [loadTargets]);
+
   const open = items.find((i) => i.id === openId) || null;
+
+  // Opening a reply marks it read, so the unread highlight clears like a real
+  // mail client. Fire-and-forget; a failure here must not block reading.
+  useEffect(() => {
+    if (!open || open.kind !== "inbound" || open.read || !open.lead_id) return;
+    api.markReplyRead({ lead_id: open.lead_id, received_at: open.at })
+      .then(() => { setItems((xs) => xs.map((x) => x.id === open.id ? { ...x, read: true } : x)); })
+      .catch(() => {});
+  }, [open]);
+
+  const replyRef = (i: MailItem) => ({ lead_id: i.lead_id || "", received_at: i.at });
+
+  const doArchive = async (i: MailItem) => {
+    setBusy("arch");
+    try {
+      await (folder === "archive" ? api.unarchiveReply(replyRef(i)) : api.archiveReply(replyRef(i)));
+      setMsg(folder === "archive" ? "Moved back to inbox." : "Archived.");
+      await load(folder);
+    } catch (e) { setMsg(`⚠ ${(e as Error).message}`); }
+    finally { setBusy(null); }
+  };
+
+  const doDelete = async (i: MailItem) => {
+    if (!confirm(`Delete this reply from ${i.business_name}?`)) return;
+    setBusy("del");
+    try { await api.deleteReply(replyRef(i)); setMsg("Deleted."); await load(folder); }
+    catch (e) { setMsg(`⚠ ${(e as Error).message}`); }
+    finally { setBusy(null); }
+  };
+
+  const doSendReply = async (i: MailItem) => {
+    if (!replyText.trim()) { setMsg("Write a reply first."); return; }
+    setBusy("reply");
+    try {
+      const r = await api.sendInboxReply({ ...replyRef(i), subject: `Re: ${i.subject}`, body: replyText });
+      setMsg(r.ok ? (r.note || "Reply sent.") : `⚠ ${r.error}`);
+      if (r.ok) { setReplying(false); setReplyText(""); await load(folder); }
+    } catch (e) { setMsg(`⚠ ${(e as Error).message}`); }
+    finally { setBusy(null); }
+  };
   const isDrafts = folder === "drafts";
 
   const toggle = (id: string) => setPicked((s) => {
@@ -66,9 +122,9 @@ export default function Mailbox({ onChanged }: { onChanged?: () => void }) {
   const writeBatch = async () => {
     setBusy("write"); setMsg(null);
     try {
-      const r = await api.draftEmailBatch({ count });
+      const r = await api.draftEmailBatch({ count, city: city || undefined, niche: niche || undefined });
       setMsg(r.note || `Agent 3 wrote ${r.drafted} email(s).`);
-      await load("drafts"); setFolder("drafts");
+      await load("drafts"); setFolder("drafts"); loadTargets();
     } catch (e) { setMsg(`⚠ ${(e as Error).message}`); }
     finally { setBusy(null); }
   };
@@ -119,8 +175,22 @@ export default function Mailbox({ onChanged }: { onChanged?: () => void }) {
     <div className="mailbox">
       {/* folder rail */}
       <aside className="mb-folders">
+        <div className="mb-filters">
+          <select className="af-input" value={city} onChange={(e) => setCity(e.target.value)} disabled={!!busy}>
+            <option value="">All cities ({targets.total})</option>
+            {targets.cities.map((c) => (
+              <option key={c.value} value={c.value}>{c.value} ({c.count})</option>
+            ))}
+          </select>
+          <select className="af-input" value={niche} onChange={(e) => setNiche(e.target.value)} disabled={!!busy}>
+            <option value="">All industries</option>
+            {targets.niches.map((n) => (
+              <option key={n.value} value={n.value}>{n.value.slice(0, 22)} ({n.count})</option>
+            ))}
+          </select>
+        </div>
         <button className="btn-mini primary mb-compose" onClick={writeBatch} disabled={busy === "write"}>
-          {busy === "write" ? "Writing…" : "✎ Write emails"}
+          {busy === "write" ? "Writing…" : `✎ Write ${count} email${count === 1 ? "" : "s"}`}
         </button>
         <div className="mb-count-row">
           <input className="af-input" type="number" min={1} max={50} value={count}
@@ -128,7 +198,9 @@ export default function Mailbox({ onChanged }: { onChanged?: () => void }) {
           <span className="muted small">at a time</span>
         </div>
         {FOLDERS.map((f) => {
-          const n = counts ? (counts as any)[f.key] ?? 0 : 0;
+          const n = counts
+            ? (f.key === "inbox" ? (counts.unread ?? 0) : ((counts as any)[f.key] ?? 0))
+            : 0;
           return (
             <button key={f.key} className={`mb-folder ${folder === f.key ? "active" : ""}`}
               onClick={() => { setFolder(f.key); setEditing(false); }}>
@@ -153,15 +225,19 @@ export default function Mailbox({ onChanged }: { onChanged?: () => void }) {
         </div>
         {items.length === 0 && <div className="mb-empty">Nothing here.</div>}
         {items.map((i) => (
-          <button key={i.id} className={`mb-row ${openId === i.id ? "open" : ""}`}
-            onClick={() => { setOpenId(i.id); setEditing(false); }}>
+          <button key={i.id}
+            className={`mb-row ${openId === i.id ? "open" : ""} ${i.kind === "inbound" && !i.read ? "unread" : ""}`}
+            onClick={() => { setOpenId(i.id); setEditing(false); setReplying(false); }}>
             {isDrafts && (
               <input type="checkbox" checked={picked.has(i.id)} onClick={(e) => e.stopPropagation()}
                 onChange={() => toggle(i.id)} />
             )}
             <span className="mb-row-main">
               <span className="mb-row-top">
-                <span className="mb-row-name">{i.business_name || i.to_email}</span>
+                <span className="mb-row-name">
+                  {i.kind === "inbound" && !i.read && <span className="mb-dot" />}
+                  {i.business_name || i.to_email}
+                </span>
                 <span className="mb-row-time">{when(i.at)}</span>
               </span>
               <span className="mb-row-subject">{i.subject}</span>
@@ -198,6 +274,39 @@ export default function Mailbox({ onChanged }: { onChanged?: () => void }) {
                 </div>
               )}
             </div>
+
+            {open.kind === "inbound" && (
+              <div className="pending-actions" style={{ marginBottom: 12 }}>
+                <button className="btn-mini primary" disabled={busy === "reply"}
+                  onClick={() => { setReplying(!replying); setReplyText(open.suggested_reply || ""); }}>
+                  {replying ? "Cancel reply" : "↩ Reply"}
+                </button>
+                <button className="btn-mini" disabled={busy === "arch"} onClick={() => doArchive(open)}>
+                  {folder === "archive" ? "Move to inbox" : "Archive"}
+                </button>
+                <button className="btn-mini danger" disabled={busy === "del"} onClick={() => doDelete(open)}>
+                  Delete
+                </button>
+              </div>
+            )}
+
+            {open.kind === "inbound" && replying && (
+              <div className="draft-edit" style={{ marginBottom: 12 }}>
+                <label className="build-label">Your reply to {open.to_email}</label>
+                <textarea className="af-input" rows={8} value={replyText}
+                  onChange={(e) => setReplyText(e.target.value)}
+                  placeholder="Type your reply…" />
+                <button className="btn-mini primary" disabled={busy === "reply"}
+                  onClick={() => doSendReply(open)}>
+                  {busy === "reply" ? "Sending…" : "Send reply"}
+                </button>
+                {open.suggested_reply && (
+                  <p className="muted small" style={{ margin: 0 }}>
+                    Pre-filled with Agent 3&apos;s suggestion — edit it before sending.
+                  </p>
+                )}
+              </div>
+            )}
 
             {open.error && <div className="draft-flags">⚠ {open.error}</div>}
             {open.collection_reason && <div className="draft-reason">Why this lead: {open.collection_reason}</div>}

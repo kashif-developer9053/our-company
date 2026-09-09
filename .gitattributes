@@ -1,0 +1,5 @@
+# Shell scripts must keep LF endings — CRLF causes "bad interpreter" errors
+# when they run on the Linux server.
+*.sh text eol=lf
+*.conf text eol=lf
+deploy/** text eol=lf

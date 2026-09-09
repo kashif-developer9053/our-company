@@ -39,7 +39,14 @@ async def scrape_google_maps(query: str, max_results: int = 20) -> dict:
     leads: list[dict] = []
     try:
         async with async_playwright() as pw:
-            browser = await pw.chromium.launch(headless=True)
+            # --no-sandbox / --disable-dev-shm-usage are required on a headless
+            # Linux server: the Chromium sandbox needs privileges a systemd
+            # service doesn't have, and /dev/shm is too small by default.
+            browser = await pw.chromium.launch(headless=True, args=[
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-gpu",
+            ])
             context = await browser.new_context(user_agent=_UA, viewport={"width": 1280, "height": 900}, locale="en-US")
             page = await context.new_page()
             await page.goto(f"https://www.google.com/maps/search/{query.replace(' ', '+')}",

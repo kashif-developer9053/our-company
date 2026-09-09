@@ -25,7 +25,7 @@ from shared.logger import get_logger
 from shared.safe_wrapper import safe_endpoint
 from shared.settings_store import get_config
 
-from .email_designer import render_email_html
+from .email_designer import render_email_html, render_email_lite
 from .mailer import fetch_replies, outbound_content_issues, send_email
 
 log = get_logger("agent3")
@@ -363,7 +363,7 @@ async def _write_email(lead: dict) -> dict:
                 "error": "Draft failed send-safety checks twice: " + "; ".join(issues)}
 
     # Designed HTML version, built from the lead's real audit + your company data.
-    html = render_email_html(body, lead, company_profile.get_profile())
+    html = render_email_lite(body, lead, company_profile.get_profile())
     return {"ok": True, "subject": subject, "body": body, "html": html,
             "spam_flags": _spam_check(subject, body)}
 
@@ -517,6 +517,35 @@ def _preview_html(html: str) -> str:
 class DraftBatchBody(BaseModel):
     count: int = 10
     lead_ids: list[str] | None = None
+    city: str | None = None      # target one city at a time
+    niche: str | None = None     # and/or one industry
+
+
+@router.get("/draft-targets")
+@safe_endpoint("agent3")
+async def draft_targets():
+    """Cities and niches that still have un-emailed leads, with counts.
+
+    Feeds the Outreach filter dropdowns so the CEO can see at a glance where
+    there is work left — e.g. "Dublin (21)" — instead of guessing.
+    """
+    already = {d["lead_id"] for d in _drafts().find({"status": {"$in": ["pending", "sent"]}}, {"lead_id": 1})}
+    cities: dict[str, int] = {}
+    niches: dict[str, int] = {}
+    total = 0
+    for d in _leads().find({"status": "verified", "email": {"$nin": ["", None]}},
+                           {"id": 1, "city": 1, "niche": 1}):
+        if d["id"] in already:
+            continue
+        total += 1
+        c = (d.get("city") or "").strip()
+        nk = (d.get("niche") or "").strip()
+        if c:
+            cities[c] = cities.get(c, 0) + 1
+        if nk:
+            niches[nk] = niches.get(nk, 0) + 1
+    tidy = lambda m: [{"value": k, "count": v} for k, v in sorted(m.items(), key=lambda x: -x[1])]
+    return {"ok": True, "total": total, "cities": tidy(cities), "niches": tidy(niches)}
 
 
 @router.post("/draft-batch")
@@ -531,8 +560,14 @@ async def draft_batch(body: DraftBatchBody):
     else:
         # Approved leads that have an address and haven't been emailed yet.
         already = {d["lead_id"] for d in _drafts().find({"status": {"$in": ["pending", "sent"]}}, {"lead_id": 1})}
-        candidates = [d for d in _leads().find({"status": "verified", "email": {"$nin": ["", None]}})
-                      if d["id"] not in already]
+        # Campaigns run better one city/industry at a time — the copy stays
+        # consistent and you can judge what actually gets replies.
+        query: dict = {"status": "verified", "email": {"$nin": ["", None]}}
+        if body.city:
+            query["city"] = {"$regex": f"^{re.escape(body.city.strip())}$", "$options": "i"}
+        if body.niche:
+            query["niche"] = {"$regex": re.escape(body.niche.strip()), "$options": "i"}
+        candidates = [d for d in _leads().find(query) if d["id"] not in already]
         # Write to the best prospects first: those with real audited website faults
         # (highest opportunity score). Leads with no findings give the writer
         # nothing concrete to say, so they go last.
@@ -629,7 +664,7 @@ async def edit_draft(draft_id: str, body: EditDraftBody):
 
     lead = _leads().find_one({"id": d.get("lead_id")}) or {}
     # The footer prints the recipient, so re-render against the edited address.
-    html = render_email_html(text, {**lead, "email": to_email}, company_profile.get_profile())
+    html = render_email_lite(text, {**lead, "email": to_email}, company_profile.get_profile())
     _drafts().update_one({"id": draft_id}, {"$set": {
         "subject": subject, "body": text, "to_email": to_email,
         "html": html, "preview_html": _preview_html(html), "edited": True,
@@ -757,6 +792,107 @@ async def whatsapp_update(lead_id: str, body: WaUpdateBody):
     return {"ok": True, "lead": wa_ser(_leads().find_one({"id": lead_id}))}
 
 
+class ReplyActionBody(BaseModel):
+    """A reply is addressed by lead id + the timestamp it arrived."""
+    lead_id: str
+    received_at: str
+
+
+def _update_reply(lead_id: str, received_at: str, changes: dict) -> bool:
+    """Set flags on one entry inside a lead's outreach_history."""
+    lead = _leads().find_one({"id": lead_id})
+    if not lead:
+        return False
+    hist = lead.get("outreach_history") or []
+    hit = False
+    for h in hist:
+        if h.get("type") == "reply" and h.get("received_at", "") == received_at:
+            h.update(changes)
+            hit = True
+    if hit:
+        _leads().update_one({"id": lead_id}, {"$set": {"outreach_history": hist}})
+    return hit
+
+
+@router.post("/inbox/read")
+@safe_endpoint("agent3")
+async def mark_reply_read(body: ReplyActionBody):
+    ok = _update_reply(body.lead_id, body.received_at, {"read": True})
+    if not ok:
+        raise HTTPException(status_code=404, detail="Reply not found")
+    return {"ok": True}
+
+
+@router.post("/inbox/archive")
+@safe_endpoint("agent3")
+async def archive_reply(body: ReplyActionBody):
+    ok = _update_reply(body.lead_id, body.received_at, {"archived": True, "read": True})
+    if not ok:
+        raise HTTPException(status_code=404, detail="Reply not found")
+    return {"ok": True}
+
+
+@router.post("/inbox/unarchive")
+@safe_endpoint("agent3")
+async def unarchive_reply(body: ReplyActionBody):
+    ok = _update_reply(body.lead_id, body.received_at, {"archived": False})
+    if not ok:
+        raise HTTPException(status_code=404, detail="Reply not found")
+    return {"ok": True}
+
+
+@router.post("/inbox/delete")
+@safe_endpoint("agent3")
+async def delete_reply(body: ReplyActionBody):
+    """Soft delete — the message stays in the lead's history for the record,
+    it just stops appearing in the mailbox."""
+    ok = _update_reply(body.lead_id, body.received_at, {"deleted": True})
+    if not ok:
+        raise HTTPException(status_code=404, detail="Reply not found")
+    return {"ok": True}
+
+
+class InboxReplyBody(BaseModel):
+    lead_id: str
+    received_at: str
+    subject: str | None = None
+    body: str
+
+
+@router.post("/inbox/send-reply")
+@safe_endpoint("agent3")
+async def send_inbox_reply(body: InboxReplyBody):
+    """Reply to a prospect from the mailbox. Plain text: this is a real
+    conversation now, not outreach, so no branded template."""
+    if not _email_configured():
+        _notify_email_missing()
+        return {"ok": False, "error": "No email credentials configured — add them in Settings."}
+    lead = _leads().find_one({"id": body.lead_id})
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    to_addr = (lead.get("email") or "").strip()
+    if not to_addr:
+        return {"ok": False, "error": "This lead has no email address."}
+
+    text = (body.body or "").strip()
+    if not text:
+        return {"ok": False, "error": "Reply is empty."}
+    subject = (body.subject or "").strip() or f"Re: {lead.get('business_name','')}".strip()
+
+    res = await asyncio.to_thread(send_email, to_addr, subject, text, "")
+    if not res["ok"]:
+        return {"ok": False, "error": res["error"]}
+
+    _leads().update_one({"id": body.lead_id}, {
+        "$set": {"last_action": "Replied by CEO", "last_action_timestamp": _now()},
+        "$push": {"outreach_history": {
+            "type": "reply_sent", "subject": subject, "body": text, "sent_at": _now()}},
+    })
+    _update_reply(body.lead_id, body.received_at, {"read": True, "replied": True})
+    _record_send()
+    return {"ok": True, "note": f"Reply sent to {to_addr}."}
+
+
 @router.get("/mailbox")
 @safe_endpoint("agent3")
 async def mailbox(folder: str = "drafts", limit: int = 100):
@@ -782,13 +918,20 @@ async def mailbox(folder: str = "drafts", limit: int = 100):
                 "edited": bool(d.get("edited")), "spam_flags": d.get("spam_flags", []),
                 "collection_reason": d.get("collection_reason", ""),
             })
-    elif folder == "inbox":
-        # Replies the prospects sent back, newest first.
+    elif folder in ("inbox", "archive"):
+        # Replies the prospects sent back, newest first. A reply is identified by
+        # lead id + received_at, which is stable, so read/archived flags can be
+        # written back onto that entry in the lead's outreach_history.
+        want_archived = folder == "archive"
         for lead in _leads().find({"outreach_history": {"$exists": True, "$ne": []}}).limit(300):
             for h in lead.get("outreach_history", []):
-                if h.get("type") != "reply":
+                if h.get("type") != "reply" or h.get("deleted"):
+                    continue
+                if bool(h.get("archived")) != want_archived:
                     continue
                 items.append({
+                    "read": bool(h.get("read")),
+                    "archived": bool(h.get("archived")),
                     "id": f"{lead['id']}:{h.get('received_at','')}", "kind": "inbound",
                     "business_name": lead.get("business_name", ""),
                     "to_email": lead.get("email", ""),
@@ -809,8 +952,20 @@ async def mailbox(folder: str = "drafts", limit: int = 100):
         "sent": _drafts().count_documents({"status": "sent"}),
         "failed": _drafts().count_documents({"status": "failed"}),
         "rejected": _drafts().count_documents({"status": "rejected"}),
-        "inbox": _leads().count_documents({"outreach_history.type": "reply"}),
+        "inbox": 0, "archive": 0, "unread": 0,
     }
+    # Reply counts need a scan because the flags live inside outreach_history.
+    for lead in _leads().find({"outreach_history.type": "reply"},
+                              {"outreach_history": 1}).limit(300):
+        for h in lead.get("outreach_history", []):
+            if h.get("type") != "reply" or h.get("deleted"):
+                continue
+            if h.get("archived"):
+                counts["archive"] += 1
+            else:
+                counts["inbox"] += 1
+                if not h.get("read"):
+                    counts["unread"] += 1
     return {"ok": True, "folder": folder, "items": items, "counts": counts}
 
 

@@ -323,7 +323,10 @@ export interface EmailDraft {
   status: "pending" | "approved" | "rejected" | "sent" | "failed";
   edited: boolean; created_at: string; sent_at?: string; error?: string;
 }
-export const draftEmailBatch = (body: { count?: number; lead_ids?: string[] }) =>
+export interface DraftTarget { value: string; count: number }
+export const getDraftTargets = () =>
+  req<{ ok: boolean; total: number; cities: DraftTarget[]; niches: DraftTarget[] }>("/agent3/draft-targets");
+export const draftEmailBatch = (body: { count?: number; lead_ids?: string[]; city?: string; niche?: string }) =>
   req<{ ok: boolean; batch_id?: string; drafted?: number; note?: string;
         failed?: { lead: string; error: string }[] }>("/agent3/draft-batch", { method: "POST", body: JSON.stringify(body) });
 export const getDrafts = (status = "pending") =>
@@ -342,8 +345,24 @@ export interface MailItem {
   subject: string; preview: string; body: string; html: string; at: string;
   status: string; error?: string; edited?: boolean; spam_flags?: string[];
   collection_reason?: string; lead_id?: string; reply_reasoning?: string; suggested_reply?: string;
+  read?: boolean; archived?: boolean;
 }
-export interface MailCounts { drafts: number; sent: number; failed: number; rejected: number; inbox: number }
+export interface MailCounts {
+  drafts: number; sent: number; failed: number; rejected: number;
+  inbox: number; archive: number; unread: number;
+}
+// Inbox actions. A reply is addressed by lead id + when it arrived.
+type ReplyRef = { lead_id: string; received_at: string };
+export const markReplyRead = (b: ReplyRef) =>
+  req<{ ok: boolean }>("/agent3/inbox/read", { method: "POST", body: JSON.stringify(b) });
+export const archiveReply = (b: ReplyRef) =>
+  req<{ ok: boolean }>("/agent3/inbox/archive", { method: "POST", body: JSON.stringify(b) });
+export const unarchiveReply = (b: ReplyRef) =>
+  req<{ ok: boolean }>("/agent3/inbox/unarchive", { method: "POST", body: JSON.stringify(b) });
+export const deleteReply = (b: ReplyRef) =>
+  req<{ ok: boolean }>("/agent3/inbox/delete", { method: "POST", body: JSON.stringify(b) });
+export const sendInboxReply = (b: ReplyRef & { subject?: string; body: string }) =>
+  req<{ ok: boolean; note?: string; error?: string }>("/agent3/inbox/send-reply", { method: "POST", body: JSON.stringify(b) });
 export const getMailbox = (folder: string) =>
   req<{ ok: boolean; folder: string; items: MailItem[]; counts: MailCounts }>(`/agent3/mailbox?folder=${folder}`);
 
