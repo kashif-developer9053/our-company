@@ -18,7 +18,14 @@ const FILTERS = [
   { key: "new", label: "New" },
   { key: "not_interested", label: "Not Interested" },
   { key: "rejected", label: "Rejected (hidden)" },
+  // Contact-route filters. Most leads are phone-only, so being able to see
+  // which can actually be emailed decides what outreach is even possible.
+  { key: "has_email", label: "Has email" },
+  { key: "no_email", label: "Phone only" },
 ];
+
+// Filters applied in the browser rather than sent to the API as a status.
+const CONTACT_FILTERS = new Set(["has_email", "no_email"]);
 
 const blankLead = { business_name: "", niche: "", city: "", email: "", phone: "", status: "new" as string };
 
@@ -35,7 +42,8 @@ export default function LeadsPage() {
 
   const load = useCallback(async () => {
     try {
-      const l = await api.getLeads(filter === "all" ? {} : { status: filter });
+      const l = await api.getLeads(
+        filter === "all" || CONTACT_FILTERS.has(filter) ? {} : { status: filter });
       setLeads(l); setErr(null);
     } catch (e) { setErr((e as Error).message); }
   }, [filter]);
@@ -43,10 +51,13 @@ export default function LeadsPage() {
   useEffect(() => { load(); }, [load]);
 
   const visible = useMemo(() => {
-    if (!query.trim()) return leads;
+    let rows = leads;
+    if (filter === "has_email") rows = rows.filter((l) => (l.email || "").trim());
+    if (filter === "no_email") rows = rows.filter((l) => !(l.email || "").trim());
+    if (!query.trim()) return rows;
     const q = query.toLowerCase();
-    return leads.filter((l) => l.business_name.toLowerCase().includes(q) || l.niche.toLowerCase().includes(q));
-  }, [leads, query]);
+    return rows.filter((l) => l.business_name.toLowerCase().includes(q) || l.niche.toLowerCase().includes(q));
+  }, [leads, query, filter]);
 
   const addLead = async () => {
     if (!form.business_name.trim()) return;
@@ -100,7 +111,7 @@ export default function LeadsPage() {
         <div className="filter-chips">
           {FILTERS.map((f) => (
             <button key={f.key} className={`chip ${filter === f.key ? "active" : ""}`} onClick={() => setFilter(f.key)}
-              style={f.key !== "all" && filter === f.key ? { borderColor: leadStatusMeta(f.key).color, color: leadStatusMeta(f.key).color } : undefined}>
+              style={f.key !== "all" && !CONTACT_FILTERS.has(f.key) && filter === f.key ? { borderColor: leadStatusMeta(f.key).color, color: leadStatusMeta(f.key).color } : undefined}>
               {f.label}
             </button>
           ))}

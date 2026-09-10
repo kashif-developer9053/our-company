@@ -29,6 +29,7 @@ export default function LeadsTable({ leads, onEdit, onDelete }: Props) {
           <tr>
             <th>Business</th>
             <th>Niche / Location</th>
+            <th>Contact</th>
             <th>Status</th>
             <th>Why this lead?</th>
             <th>Remarks</th>
@@ -46,6 +47,20 @@ export default function LeadsTable({ leads, onEdit, onDelete }: Props) {
               <td>
                 {l.niche}
                 {l.city ? <span className="muted"> · {l.city}</span> : null}
+              </td>
+              {/* Contact route matters operationally: a phone-only lead cannot
+                  be emailed at all, and most leads here are phone-only. Showing
+                  it stops those being queued for outreach that must fail. */}
+              <td className="lead-contact">
+                {l.email ? (
+                  <a href={`mailto:${l.email}`} className="lead-email" title={l.email}>{l.email}</a>
+                ) : (
+                  <span className="lead-noemail">no email</span>
+                )}
+                {l.phone ? (
+                  <a href={`tel:${l.phone.replace(/\s+/g, "")}`} className="lead-phone">{l.phone}</a>
+                ) : null}
+                {!l.email && l.phone && <span className="lead-hint">WhatsApp only</span>}
               </td>
               <td>
                 <LeadStatusBadge status={l.status} />
@@ -66,7 +81,7 @@ export default function LeadsTable({ leads, onEdit, onDelete }: Props) {
             </tr>
           ))}
           {leads.length === 0 && (
-            <tr><td colSpan={actions ? 7 : 6} className="muted" style={{ padding: 16 }}>No leads.</td></tr>
+            <tr><td colSpan={actions ? 8 : 7} className="muted" style={{ padding: 16 }}>No leads.</td></tr>
           )}
         </tbody>
       </table>

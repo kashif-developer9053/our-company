@@ -595,7 +595,19 @@ async def draft_batch(body: DraftBatchBody):
 
     n = max(1, min(body.count, 50))
     if body.lead_ids:
-        leads = [d for d in (_leads().find_one({"id": i}) for i in body.lead_ids) if d]
+        # Explicitly-chosen leads still need an address: 213 of the approved
+        # leads are phone-only Pakistani businesses that never published an
+        # email, and writing them a draft only produces a guaranteed failure
+        # in the outbox. Report them instead so they can be worked on WhatsApp.
+        picked = [d for d in (_leads().find_one({"id": i}) for i in body.lead_ids) if d]
+        leads = [d for d in picked if (d.get("email") or "").strip()]
+        no_email = [d.get("business_name", "?") for d in picked
+                    if not (d.get("email") or "").strip()]
+        if no_email and not leads:
+            return {"ok": True, "batch_id": "", "drafted": 0,
+                    "note": (f"None of those {len(no_email)} leads has an email address "
+                             f"(they were found by phone only). Use the WhatsApp panel for "
+                             f"them, or run 'Verify guessed addresses' after enrichment.")}
     else:
         # Approved leads that have an address and haven't been emailed yet.
         already = {d["lead_id"] for d in _drafts().find({"status": {"$in": ["pending", "sent"]}}, {"lead_id": 1})}
@@ -694,7 +706,16 @@ async def draft_batch(body: DraftBatchBody):
             "Agent 3 has written personalised emails. Preview each one and approve before anything is sent.",
             agent_id="agent3", action="drafts_pending", ref_id=batch_id,
         )
-    return {"ok": True, "batch_id": batch_id, "drafted": drafted, "failed": failed}
+    result = {"ok": True, "batch_id": batch_id, "drafted": drafted, "failed": failed}
+    if body.lead_ids:
+        skipped = [d.get("business_name", "?") for d in
+                   (_leads().find_one({"id": i}) for i in body.lead_ids)
+                   if d and not (d.get("email") or "").strip()]
+        if skipped:
+            result["skipped_no_email"] = skipped
+            result["note"] = (f"{len(skipped)} of the selected leads have no email address "
+                              f"and were skipped — reach those on WhatsApp instead.")
+    return result
 
 
 # --- deliverability: bounces, complaints, suppression -----------------------

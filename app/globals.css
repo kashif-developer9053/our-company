@@ -1528,3 +1528,18 @@ body {
   color: #8fe000;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
+
+/* Contact column in the CRM table. Most leads are phone-only, so the
+   distinction has to be readable at a glance. */
+.lead-contact { max-width: 220px; }
+.lead-contact a { display: block; text-decoration: none; }
+.lead-email {
+  color: #7fb2ea;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lead-phone { color: #b8c2d4; font-size: 12px; }
+.lead-noemail { color: #6e7a8f; font-size: 11.5px; font-style: italic; display: block; }
+.lead-hint { color: #d9c98a; font-size: 10.5px; }
