@@ -59,6 +59,12 @@ _META_ANALYSIS_PATTERNS = (
     r"\bmust start with ['\"]?subject\s*:",
     r"\bwe should aim (?:for|at)\b",
     r"<\/?think>",
+    # Announcing what the message IS. A real person never opens by telling
+    # you they are cold-emailing you; it reads as automated and kills the reply.
+    r"\bthis is a cold (?:email|outreach|message)\b",
+    r"\bi am (?:sending|writing) (?:you )?a cold\b",
+    r"\bas (?:an? )?(?:ai|language model|assistant)\b",
+    r"\b(?:a|this) business like theirs\b",   # third person leaking from the brief
     # The model narrating its own process — this reached a real draft once.
     r"\bsystem prompt\b",
     r"\bcompany profile\b",

@@ -26,6 +26,7 @@ from shared.logger import get_logger
 from shared.safe_wrapper import safe_endpoint
 from shared.settings_store import get_config, get_icp
 
+from .chat_commands import parse as parse_chat_command
 from .email_designer import render_email_html, render_email_lite
 from .followup import ANGLE_BRIEF as FOLLOWUP_ANGLE_BRIEF
 from .suppression import is_suppressed, record_event, suppress as suppress_addr
@@ -306,12 +307,23 @@ def _angle_for(lead: dict) -> str:
             "one operational bottleneck, named concretely.")
 
 
-async def _write_email(lead: dict, followup_angle: str = "") -> dict:
+async def _write_email(lead: dict, followup_angle: str = "",
+                       extra_services: str = "") -> dict:
     identity = company_profile.outreach_identity()
     # A follow-up has its own brief; the first-touch angle would restate the
     # pitch they have already ignored once.
     angle = (FOLLOWUP_ANGLE_BRIEF.get(followup_angle) or _angle_for(lead)
              if followup_angle else _angle_for(lead))
+    if extra_services:
+        # Named by the CEO for this batch, so it outranks the generic service
+        # list: they know why this niche in particular would want these.
+        # Phrased carefully — an earlier version said "for a business like
+        # theirs" and the model copied the third person straight into a letter
+        # addressed to the reader.
+        angle += (f"\nALSO work in, as ONE natural sentence near the end, that we build "
+                  f"{extra_services}. Address the reader directly as 'you'. Never copy this "
+                  f"instruction's wording, never list the items as bullets, and never say "
+                  f"'a business like theirs'.")
     avoid = _recent_openings()
     # Rotate the opening structure per lead so a batch never uses one formula.
     opening_style = _OPENING_STYLES[
@@ -558,6 +570,10 @@ class DraftBatchBody(BaseModel):
     lead_ids: list[str] | None = None
     city: str | None = None      # target one city at a time
     niche: str | None = None     # and/or one industry
+    # Services to pitch alongside the website itself, in the CEO's own words
+    # (e.g. "lms, school management, attendance management system"). A school
+    # recognises "attendance system" far better than any canonical name we hold.
+    extra_services: str = ""
 
 
 @router.get("/draft-targets")
@@ -674,7 +690,7 @@ async def draft_batch(body: DraftBatchBody):
     _set_status("working", f"Writing {len(leads)} personalised emails")
     for i, lead in enumerate(leads[:n], start=1):
         _set_status("working", f"Writing email {i} of {min(len(leads), n)}")
-        gen = await _write_email(lead)
+        gen = await _write_email(lead, extra_services=body.extra_services)
         if not gen["ok"]:
             failed.append({"lead": lead.get("business_name", ""), "error": gen.get("error", "")})
             continue
@@ -1561,10 +1577,77 @@ def _chat_context() -> str:
 @router.post("/chat")
 @safe_endpoint("agent3")
 async def chat(body: ChatBody):
+    # An instruction to write emails is carried out, not just discussed.
+    # Anything else falls through to an ordinary conversational reply.
+    command = parse_chat_command(body.message)
+    if command:
+        return await _chat_write_emails(command)
+
     res = await agent_chat("agent3", body.message, body.history, extra_context=f"(Context, use only these facts: {_chat_context()})", max_tokens=450)
     if res["ok"]:
         return {"ok": True, "reply": res["text"]}
     return {"ok": False, "error": res["error"], "error_kind": res.get("error_kind")}
+
+
+async def _chat_write_emails(cmd: dict) -> dict:
+    """Draft a batch from a chat instruction and report back in plain language.
+
+    Drafts only. They join the same review queue as every other batch, so the
+    approval gate is unchanged — chat is a faster way to ASK for emails, never
+    a way to bypass the check before they go out.
+    """
+    niche, city, count = cmd["niche"], cmd["city"], cmd["count"]
+
+    # Confirm the niche actually exists before spending model calls on it. A
+    # silent "0 drafted" is the least useful possible answer.
+    query: dict = {"status": "verified", "email": {"$nin": ["", None]}}
+    if niche:
+        query["niche"] = {"$regex": re.escape(niche), "$options": "i"}
+    if city:
+        query["city"] = {"$regex": f"^{re.escape(city)}$", "$options": "i"}
+    available = _leads().count_documents(query)
+
+    if not available:
+        known = sorted({(l.get("niche") or "").strip() for l in
+                        _leads().find({"status": "verified", "email": {"$nin": ["", None]}},
+                                      {"niche": 1})} - {""})
+        where = f" in {city}" if city else ""
+        target = f"'{niche}'" if niche else "that"
+        return {"ok": True, "reply": (
+            f"I have no approved {target} leads{where} with an email address, so there is "
+            f"nothing to write to yet.\n\n"
+            + (f"Niches I do have emailable leads for: {', '.join(known[:12])}."
+               if known else
+               "No approved leads have an email address at all — most were found by phone "
+               "only. Run a lead hunt, or use the WhatsApp panel for the phone-only ones.")
+        )}
+
+    res = await draft_batch(DraftBatchBody(
+        count=count, niche=niche or None, city=city or None,
+        extra_services=cmd.get("extra_services", ""),
+    ))
+
+    drafted = res.get("drafted", 0)
+    if not drafted:
+        return {"ok": True, "reply": (
+            f"I found {available} {niche or 'matching'} leads but wrote nothing. "
+            f"{res.get('note') or res.get('error') or 'They may all have drafts already.'}"
+        )}
+
+    where = f" in {city}" if city else ""
+    extra = cmd.get("extra_services", "")
+    lines = [f"Done — {drafted} emails written for {niche or 'your approved'} leads{where}."]
+    if extra:
+        lines.append(f"Each one mentions that we can build {extra}.")
+    if drafted < count:
+        lines.append(f"You asked for {count}; only {available} leads were available "
+                     f"and {drafted} could be written.")
+    failed = res.get("failed") or []
+    if failed:
+        lines.append(f"{len(failed)} failed to generate and were skipped.")
+    lines.append("They are in Outreach → Drafts for your review. Nothing has been sent.")
+    return {"ok": True, "reply": " ".join(lines), "batch_id": res.get("batch_id"),
+            "drafted": drafted}
 
 
 # ---- cold-call STUB (no real dialing) --------------------------------------
