@@ -67,6 +67,17 @@ _NICHE_PATTERNS = (
 
 _CITY = re.compile(r"\b(?:in|from|based in|located in)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b")
 
+# Asking WHETHER we can do something, rather than telling us to. A hypothetical
+# ("if I said ... can you do this?") describes the work in full, so the write
+# patterns match it perfectly — the question mark is what distinguishes them.
+_IS_QUESTION = re.compile(
+    r"(?:^|\b)(?:can|could|would|will|do|are|is)\s+you\b"      # "can you write..."
+    r"|\bare you able\b|\bis it possible\b|\bwhat if\b"
+    r"|\bif i (?:said|say|ask|tell|wanted)\b"                   # hypothetical framing
+    r"|\?\s*$",                                                 # simply ends in a question
+    re.I,
+)
+
 # Words that are never the niche, even when the grammar suggests they are.
 _NOT_A_NICHE = {
     "a", "an", "the", "them", "email", "emails", "mail", "mails", "lead", "leads",
@@ -96,6 +107,11 @@ def parse(message: str) -> dict | None:
     if not msg or len(msg) > 2000:
         return None
     if not (_WRITE_VERB.search(msg) or _WRITE_VERB_ALT.search(msg)):
+        return None
+    # "can you do this?" describes the work without asking for it. Acting on a
+    # question is worse than missing a command: the CEO gets 20 unexpected
+    # drafts instead of an answer.
+    if _IS_QUESTION.search(msg):
         return None
 
     count = 10

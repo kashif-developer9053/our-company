@@ -227,8 +227,8 @@ _OPENING_STYLES = (
     "Open by stating something concrete and factual about their online presence in one blunt "
     "sentence. No 'I noticed', no hedging.",
     "Open by naming their business and city in the first four words, then the observation.",
-    "Open with a candid one-line admission that this is a cold email, then get straight to the "
-    "point in the next sentence. Dry, not apologetic.",
+    "Open with one blunt sentence about what their customers cannot do right now, then get "
+    "straight to the point. Dry, not apologetic, no preamble.",
     "Open with a comparison to a competitor's experience — without naming any competitor.",
     "Open mid-thought, as if continuing a conversation, then explain what prompted it.",
     "Open with the outcome they are missing, stated plainly, before mentioning their site at all.",
