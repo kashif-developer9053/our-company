@@ -660,22 +660,42 @@ async def draft_batch(body: DraftBatchBody):
         ), reverse=True)
         leads = candidates[:n]
     if not leads:
-        # Distinguish "nothing approved" from "nothing with a trustworthy
-        # address", because the fix is completely different.
-        unverified = _leads().count_documents({
-            "status": "verified", "email": {"$nin": ["", None]},
-            "email_confidence": {"$nin": ["found", "published", "verified_guess"]},
-            "email_verify.status": {"$exists": False},
-        })
-        if unverified:
-            return {"ok": True, "batch_id": "", "drafted": 0,
-                    "note": (f"{unverified} approved leads only have guessed addresses "
-                             f"(invented info@ that nobody confirmed). Run 'Verify guessed "
-                             f"addresses' on the Outreach page — the ones a mail server "
-                             f"accepts become sendable, and the rest are dropped before "
-                             f"they can bounce.")}
-        return {"ok": True, "batch_id": "", "drafted": 0,
-                "note": "No approved leads are waiting for an email. Approve leads in the CRM first."}
+        # Work out the reason WITHIN the requested city/niche. Counting across
+        # the whole CRM reported "16 leads have guessed addresses" for a niche
+        # whose real problem was that every lead already had a draft, which
+        # sent the reader to fix something that was not broken.
+        scope: dict = {"status": "verified", "email": {"$nin": ["", None]}}
+        if body.city:
+            scope["city"] = {"$regex": f"^{re.escape(body.city.strip())}$", "$options": "i"}
+        if body.niche:
+            scope["niche"] = {"$regex": re.escape(body.niche.strip()), "$options": "i"}
+        where = " ".join(x for x in (body.niche or "", f"in {body.city}" if body.city else "") if x)
+        where = f" for {where}" if where.strip() else ""
+
+        in_scope = list(_leads().find(scope, {"id": 1, "email_confidence": 1, "email_verify": 1}))
+        drafted_already = sum(1 for l in in_scope if l["id"] in already)
+        unverified = sum(
+            1 for l in in_scope
+            if l["id"] not in already
+            and (l.get("email_confidence") not in ("found", "published", "verified_guess"))
+            and not (l.get("email_verify") or {}).get("status") in ("valid", "catch_all")
+        )
+
+        if not in_scope:
+            note = (f"No approved leads{where} have an email address. Approve leads in the "
+                    f"CRM first, or run a lead hunt for that niche.")
+        elif drafted_already == len(in_scope):
+            note = (f"All {len(in_scope)} approved leads{where} already have a draft or a sent "
+                    f"email — there is nobody new left to write to. Approve and send what is "
+                    f"waiting in Drafts, or hunt for more leads in that niche.")
+        elif unverified:
+            note = (f"{unverified} of the remaining leads{where} only have guessed addresses "
+                    f"(invented info@ that nobody confirmed). Run 'Verify guessed addresses' "
+                    f"on the Outreach page — the ones a mail server accepts become sendable, "
+                    f"and the rest are dropped before they can bounce.")
+        else:
+            note = f"No leads{where} are waiting for an email right now."
+        return {"ok": True, "batch_id": "", "drafted": 0, "note": note}
 
     # Without a company identity the writer invents a role — it has produced
     # emails asking to BUY from the prospect. Refuse rather than send nonsense.
