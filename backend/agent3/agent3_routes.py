@@ -1629,9 +1629,21 @@ async def _chat_write_emails(cmd: dict) -> dict:
 
     drafted = res.get("drafted", 0)
     if not drafted:
+        # Say WHY. "They may all have drafts already" was reported even when the
+        # real cause was the model provider being unreachable, which sent people
+        # looking in the wrong place.
+        failed = res.get("failed") or []
+        if failed:
+            reasons = {f.get("error", "unknown") for f in failed}
+            detail = ("Every attempt failed to generate: "
+                      + "; ".join(list(reasons)[:2])
+                      + ". This is usually the AI provider being unreachable or the "
+                        "draft failing the send-safety check — try again in a moment.")
+        else:
+            detail = (res.get("note") or res.get("error")
+                      or "They may all have drafts already.")
         return {"ok": True, "reply": (
-            f"I found {available} {niche or 'matching'} leads but wrote nothing. "
-            f"{res.get('note') or res.get('error') or 'They may all have drafts already.'}"
+            f"I found {available} {niche or 'matching'} leads but wrote nothing. {detail}"
         )}
 
     where = f" in {city}" if city else ""
