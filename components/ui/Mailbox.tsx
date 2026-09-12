@@ -9,6 +9,9 @@ import type { MailItem, MailCounts } from "@/lib/api";
 // actions — nothing is ever sent without an explicit approval here.
 const FOLDERS = [
   { key: "drafts", label: "Drafts", icon: "M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" },
+  // Approved but held back by the daily send cap. Without this folder they
+  // were invisible: gone from Drafts, not yet in Sent.
+  { key: "queued", label: "Queued", icon: "M12 8v4l3 2M12 22a10 10 0 1 1 0-20 10 10 0 0 1 0 20Z" },
   { key: "sent", label: "Sent", icon: "m22 2-7 20-4-9-9-4Z" },
   { key: "inbox", label: "Inbox", icon: "M22 12h-6l-2 3h-4l-2-3H2M5.5 5h13l3.5 7v6a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-6Z" },
   { key: "archive", label: "Archive", icon: "M21 8v13H3V8M1 3h22v5H1zM10 12h4" },

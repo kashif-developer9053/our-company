@@ -380,6 +380,8 @@ export interface MailItem {
 export interface MailCounts {
   drafts: number; sent: number; failed: number; rejected: number;
   inbox: number; archive: number; unread: number;
+  // Approved, waiting on the daily send cap.
+  queued: number;
 }
 // Inbox actions. A reply is addressed by lead id + when it arrived.
 type ReplyRef = { lead_id: string; received_at: string };

@@ -98,6 +98,30 @@ async def _health_check_loop():
         await asyncio.sleep(180)  # every 3 minutes
 
 
+async def _queued_send_loop():
+    """Resume sending emails the daily cap held back.
+
+    Approving a batch bigger than the remaining cap leaves the surplus in
+    status "approved" and the background sender simply stops. Nothing used to
+    pick them up again, so they sat there indefinitely — invisible to the CEO,
+    who saw them leave Drafts and never arrive in Sent.
+    """
+    import asyncio
+    await asyncio.sleep(120)  # let the app settle before the first pass
+    while True:
+        try:
+            from agent3.agent3_routes import _drafts, _remaining_cap, _send_approved
+            if _remaining_cap() > 0:
+                waiting = [d["id"] for d in _drafts().find({"status": "approved"}, {"id": 1})]
+                if waiting:
+                    log.info("Resuming %d queued email(s) — daily cap has room again.",
+                             len(waiting))
+                    await _send_approved(waiting)
+        except Exception as exc:  # noqa: BLE001
+            log.error("Queued-send loop error (isolated): %s", exc)
+        await asyncio.sleep(1800)  # every 30 minutes
+
+
 async def _followup_loop():
     """Draft follow-ups for leads that never replied, once every few hours.
 
@@ -140,6 +164,7 @@ async def lifespan(app: FastAPI):
     task = asyncio.create_task(_reply_check_loop())
     health_task = asyncio.create_task(_health_check_loop())
     followup_task = asyncio.create_task(_followup_loop())
+    queued_task = asyncio.create_task(_queued_send_loop())
     log.info(
         "Backend ready | storage=%s | encryption_secret_set=%s",
         backend_name(),
@@ -149,6 +174,7 @@ async def lifespan(app: FastAPI):
     task.cancel()
     health_task.cancel()
     followup_task.cancel()
+    queued_task.cancel()
 
 
 app = FastAPI(title="AI Agency Virtual Office — Backend", version="2.0", lifespan=lifespan)

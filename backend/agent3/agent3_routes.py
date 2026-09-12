@@ -1243,8 +1243,11 @@ async def mailbox(folder: str = "drafts", limit: int = 100):
     folder = (folder or "drafts").lower()
     items: list[dict] = []
 
-    if folder in ("drafts", "sent", "failed", "rejected"):
-        status = {"drafts": "pending"}.get(folder, folder)
+    # "queued" = approved by the CEO but not yet on the wire, almost always
+    # because the daily send cap was reached. Without a folder these were
+    # invisible: not in Drafts (no longer pending), not in Sent, not in Failed.
+    if folder in ("drafts", "queued", "sent", "failed", "rejected"):
+        status = {"drafts": "pending", "queued": "approved"}.get(folder, folder)
         for d in _drafts().find({"status": status}).sort("created_at", -1).limit(limit):
             items.append({
                 "id": d.get("id"), "kind": "outbound", "business_name": d.get("business_name", ""),
@@ -1290,6 +1293,7 @@ async def mailbox(folder: str = "drafts", limit: int = 100):
         "sent": _drafts().count_documents({"status": "sent"}),
         "failed": _drafts().count_documents({"status": "failed"}),
         "rejected": _drafts().count_documents({"status": "rejected"}),
+        "queued": _drafts().count_documents({"status": "approved"}),
         "inbox": 0, "archive": 0, "unread": 0,
     }
     # Reply counts need a scan because the flags live inside outreach_history.
@@ -1341,8 +1345,20 @@ async def approve_and_send(body: DraftDecision):
         return {"ok": True, "sent": 0, "note": "No pending drafts matched."}
     _drafts().update_many({"id": {"$in": ids}}, {"$set": {"status": "approved"}})
     asyncio.create_task(_send_approved(ids))
-    return {"ok": True, "approved": len(ids),
-            "note": f"Sending {len(ids)} approved email(s) — Agent 3 is working through them."}
+
+    # Say upfront if the cap will hold some back, rather than letting them
+    # quietly disappear from Drafts and never appear in Sent.
+    room = _remaining_cap()
+    if room < len(ids):
+        held = len(ids) - max(0, room)
+        note = (f"Approved {len(ids)}. Sending {max(0, room)} now — the daily cap of "
+                f"{get_config().get('daily_send_cap', 25)} holds back {held}, which wait in "
+                f"Outreach → Queued and send automatically tomorrow. Raise the cap in "
+                f"Settings to send them sooner.")
+    else:
+        note = f"Sending {len(ids)} approved email(s) — Agent 3 is working through them."
+    return {"ok": True, "approved": len(ids), "queued": max(0, len(ids) - max(0, room)),
+            "note": note}
 
 
 async def _send_approved(draft_ids: list[str]) -> None:
@@ -1355,7 +1371,21 @@ async def _send_approved(draft_ids: list[str]) -> None:
                 continue
             remaining = _remaining_cap()
             if remaining <= 0:
-                log.info("Daily cap reached — %d drafts stay approved for tomorrow.", len(draft_ids) - sent)
+                held = len(draft_ids) - sent
+                log.info("Daily cap reached — %d drafts stay approved for tomorrow.", held)
+                # This used to be logged only, so the emails simply vanished
+                # from the CEO's point of view: gone from Drafts, never in Sent.
+                notifications.notify(
+                    "alert",
+                    f"Daily send limit reached — {held} email(s) waiting",
+                    f"{sent} sent today, which is the daily cap of "
+                    f"{get_config().get('daily_send_cap', 25)}. The remaining {held} are "
+                    f"approved and waiting in Outreach → Queued; they send automatically "
+                    f"tomorrow. Raise the cap in Settings if you want them sooner.",
+                    agent_id="agent3", action="drafts_queued",
+                    dedupe_key="daily_cap_reached",
+                )
+                _set_status("idle", f"Daily cap reached — {held} email(s) queued for tomorrow")
                 break
             # Never contact a suppressed address. A hard bounce or complaint
             # already told us this one damages the sending domain.
