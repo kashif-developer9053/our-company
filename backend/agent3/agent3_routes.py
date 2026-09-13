@@ -29,6 +29,9 @@ from shared.settings_store import get_config, get_icp
 from .chat_commands import parse as parse_chat_command
 from .email_designer import render_email_html, render_email_lite
 from .followup import ANGLE_BRIEF as FOLLOWUP_ANGLE_BRIEF
+from .niche_services import audience_for as niche_audience_for
+from .niche_services import services_for as niche_services_for
+from .niche_services import services_line as niche_services_line
 from .suppression import is_suppressed, record_event, suppress as suppress_addr
 from .suppression import stats as suppression_stats
 from .verify_email import verify as verify_address
@@ -324,6 +327,16 @@ async def _write_email(lead: dict, followup_angle: str = "",
                   f"{extra_services}. Address the reader directly as 'you'. Never copy this "
                   f"instruction's wording, never list the items as bullets, and never say "
                   f"'a business like theirs'.")
+    elif not followup_angle:
+        # No batch-specific services named, so offer what this INDUSTRY runs on.
+        # Selling only a website leaves the larger sale on the table, and a
+        # generic service list reads as a brochure — a school needs to hear
+        # "attendance and results", not "ERP solutions".
+        systems = niche_services_line(lead.get("niche", ""), limit=3)
+        if systems:
+            angle += (f"\nALSO work in, as ONE natural sentence near the end, that alongside the "
+                      f"website we build {systems}. Address the reader directly as 'you', use "
+                      f"their industry's plain vocabulary, and never list these as bullets.")
     avoid = _recent_openings()
     # Rotate the opening structure per lead so a batch never uses one formula.
     opening_style = _OPENING_STYLES[
@@ -1012,15 +1025,22 @@ async def edit_draft(draft_id: str, body: EditDraftBody):
 
 # ---- WhatsApp outreach (click-to-send, never automated) --------------------
 WA_SYSTEM = (
-    "You write very short WhatsApp messages for a web development agency contacting a local "
-    "business owner. WhatsApp is not email: no subject, no signature, no formal paragraphs.\n\n"
+    "You write short WhatsApp messages for an IT company contacting a local business owner in "
+    "Pakistan. WhatsApp is not email: no subject, no signature, no formal paragraphs.\n\n"
+    "WHAT YOU ARE SELLING: not just a website. We build the software this KIND of business runs "
+    "on. Every message must offer BOTH — fixing or building their online presence, AND the "
+    "systems listed in the brief that fit their industry. A message that only says 'you have no "
+    "website' gives the reader nothing to want and is the main reason these get ignored.\n\n"
     "RULES:\n"
-    "- 2 to 4 short lines, under 60 words total. It must be readable at a glance on a phone.\n"
+    "- 4 to 6 short lines, 60 to 100 words. Readable at a glance, but not so thin it says nothing.\n"
     "- Open with a respectful greeting appropriate for Pakistan.\n"
-    "- Name ONE real problem you observed on their website, as the BUSINESS consequence "
-    "(customers leaving, not being found) — never the technical detail, never how to fix it.\n"
+    "- Say what their situation costs them, in terms of the people they are trying to reach — "
+    "never the technical detail, never how to fix it.\n"
+    "- Then name TWO OR THREE systems from the brief, in plain words, as things we can build for "
+    "them. Use their industry's own vocabulary.\n"
     "- End with one easy question inviting a reply.\n"
     "- No hype, no emoji spam (one at most), no ALL CAPS, no links, no price talk.\n"
+    "- Never use the words ERP, CRM or 'solution' on their own — say what the system DOES.\n"
     "- Sound like a real person typing, not a broadcast."
 )
 
@@ -1074,14 +1094,25 @@ async def whatsapp_message(body: WaMessageBody):
 
     angle = _angle_for(lead)
     profile = company_profile.get_profile()
-    lang = ("Write in Roman Urdu (Urdu written in English letters), natural and conversational."
+    niche = lead.get("niche", "")
+    # What this INDUSTRY actually buys, not our generic service list. This is
+    # what turns "you have no website" into a message worth replying to.
+    systems = niche_services_for(niche, limit=4)
+    audience = niche_audience_for(niche)
+    lang = ("Write in Roman Urdu — Urdu written in English letters, the way Pakistanis actually "
+            "type on WhatsApp. Natural and conversational, not formal or translated. Keep "
+            "technical product names in English (website, system, software)."
             if body.language == "roman_urdu" else "Write in simple, clear English.")
     prompt = (
         f"{lang}\n\n"
-        f"BUSINESS: {lead.get('business_name')} — {lead.get('niche','')} in {lead.get('city','')}\n"
-        f"YOUR COMPANY: {profile.get('company_name','')} ({', '.join(profile.get('services_offered', [])[:3])})\n"
+        f"BUSINESS: {lead.get('business_name')} — {niche} in {lead.get('city','')}\n"
+        f"WHO THEY WANT TO REACH: {audience}\n"
+        f"YOUR COMPANY: {profile.get('company_name','')}\n"
         f"YOUR NAME: {profile.get('sender_name','')}\n\n"
         f"WHAT YOU FOUND (say the consequence, never the technical detail):\n{angle}\n\n"
+        f"SYSTEMS WE CAN BUILD FOR THIS INDUSTRY — pick the two or three most useful and "
+        f"mention them in plain words:\n- " + "\n- ".join(systems) + "\n\n"
+        f"Offer to build or improve their online presence AND these systems. "
         f"Write the WhatsApp message only — no preamble, no quotes around it."
     )
     res = await agent_task("agent3", prompt, max_tokens=400, purpose="whatsapp",

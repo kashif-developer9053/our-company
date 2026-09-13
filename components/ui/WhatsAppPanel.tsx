@@ -32,6 +32,10 @@ export default function WhatsAppPanel() {
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [filter, setFilter] = useState<string>("not_contacted");
   const [lang, setLang] = useState<"english" | "roman_urdu">("english");
+  // Language per number: the same list mixes contacts who read English
+  // comfortably with those who reply far better in Roman Urdu, so one global
+  // setting was the wrong shape.
+  const [rowLang, setRowLang] = useState<Record<string, "english" | "roman_urdu">>({});
   const [openId, setOpenId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [link, setLink] = useState("");
@@ -52,10 +56,12 @@ export default function WhatsAppPanel() {
     return new Date(l.sent_at).toDateString() === new Date().toDateString();
   }).length;
 
-  const prepare = async (l: WhatsAppLead) => {
+  const prepare = async (l: WhatsAppLead, language?: "english" | "roman_urdu") => {
+    const useLang = language ?? rowLang[l.id] ?? lang;
+    setRowLang((m) => ({ ...m, [l.id]: useLang }));
     setBusy(l.id); setMsg(null); setOpenId(l.id); setDraft(""); setLink("");
     try {
-      const r = await api.writeWhatsAppMessage(l.id, lang);
+      const r = await api.writeWhatsAppMessage(l.id, useLang);
       if (!r.ok) { setMsg(`⚠ ${r.error}`); return; }
       setDraft(r.message || ""); setLink(r.link || "");
     } catch (e) { setMsg(`⚠ ${(e as Error).message}`); }
@@ -115,7 +121,7 @@ export default function WhatsAppPanel() {
           </button>
         ))}
         <span style={{ marginLeft: "auto", display: "flex", gap: 6, alignItems: "center" }}>
-          <span className="muted small">Language</span>
+          <span className="muted small">Default language</span>
           <select className="af-input" style={{ width: 130 }} value={lang}
             onChange={(e) => setLang(e.target.value as "english" | "roman_urdu")}>
             <option value="english">English</option>
@@ -176,10 +182,18 @@ export default function WhatsAppPanel() {
                       onBlur={(e) => e.target.value !== l.remarks && saveRemarks(l, e.target.value)} />
                   </td>
                   <td className="row-actions">
-                    <button className="btn-mini primary" disabled={busy === l.id}
-                      onClick={() => prepare(l)}>
-                      {busy === l.id ? "…" : openId === l.id ? "Hide" : "Message"}
-                    </button>
+                    <div className="wa-langbtns">
+                      <button className="btn-mini primary" disabled={busy === l.id}
+                        title="Write this message in English"
+                        onClick={() => prepare(l, "english")}>
+                        {busy === l.id && rowLang[l.id] === "english" ? "…" : "English"}
+                      </button>
+                      <button className="btn-mini" disabled={busy === l.id}
+                        title="Roman Urdu — Urdu written in English letters"
+                        onClick={() => prepare(l, "roman_urdu")}>
+                        {busy === l.id && rowLang[l.id] === "roman_urdu" ? "…" : "Roman Urdu"}
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
