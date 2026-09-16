@@ -1582,3 +1582,12 @@ body {
   text-decoration: underline;
 }
 .mb-replybar { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+
+/* A lead whose draft was discarded: excluded from future emails and
+   follow-ups, but still a real lead worth a call or WhatsApp. */
+.lead-excluded {
+  display: block;
+  font-size: 10.5px;
+  color: #e08f8f;
+  margin-top: 2px;
+}

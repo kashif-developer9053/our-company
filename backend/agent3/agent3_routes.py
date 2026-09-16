@@ -604,7 +604,8 @@ async def draft_targets():
     cities: dict[str, int] = {}
     niches: dict[str, int] = {}
     total = 0
-    for d in _leads().find({"status": "verified", "email": {"$nin": ["", None]}},
+    for d in _leads().find({"status": "verified", "email": {"$nin": ["", None]},
+                            "do_not_email": {"$ne": True}},
                            {"id": 1, "city": 1, "niche": 1}):
         if d["id"] in already:
             continue
@@ -654,6 +655,9 @@ async def draft_batch(body: DraftBatchBody):
         query: dict = {
             "status": "verified",
             "email": {"$nin": ["", None]},
+            # A discarded draft means "do not contact this prospect", so they
+            # never come back into a batch.
+            "do_not_email": {"$ne": True},
             "$or": [
                 {"email_confidence": {"$in": ["found", "published", "verified_guess"]}},
                 {"email_verify.status": {"$in": ["valid", "catch_all"]}},
@@ -680,7 +684,8 @@ async def draft_batch(body: DraftBatchBody):
         # the whole CRM reported "16 leads have guessed addresses" for a niche
         # whose real problem was that every lead already had a draft, which
         # sent the reader to fix something that was not broken.
-        scope: dict = {"status": "verified", "email": {"$nin": ["", None]}}
+        scope: dict = {"status": "verified", "email": {"$nin": ["", None]},
+                       "do_not_email": {"$ne": True}}
         if body.city:
             scope["city"] = {"$regex": f"^{re.escape(body.city.strip())}$", "$options": "i"}
         if body.niche:
@@ -1382,9 +1387,41 @@ class DraftDecision(BaseModel):
 @router.post("/drafts/reject")
 @safe_endpoint("agent3")
 async def reject_drafts(body: DraftDecision):
+    """Discard drafts AND stop writing to those leads again.
+
+    Rejecting used to mark only the draft, leaving the lead `verified` and
+    fully eligible, so the next batch wrote to it again. One lead was redrafted
+    eleven times after being discarded. Discarding is a decision about the
+    PROSPECT, not about one piece of copy, so it is recorded on the lead.
+    """
     q = _draft_selector(body)
-    n = _drafts().update_many({**q, "status": "pending"}, {"$set": {"status": "rejected"}}).modified_count
-    return {"ok": True, "rejected": n}
+    targets = list(_drafts().find({**q, "status": "pending"}, {"id": 1, "lead_id": 1}))
+    if not targets:
+        return {"ok": True, "rejected": 0, "excluded": 0}
+
+    n = _drafts().update_many({**q, "status": "pending"},
+                              {"$set": {"status": "rejected", "rejected_at": _now()}}).modified_count
+
+    lead_ids = sorted({d.get("lead_id") for d in targets if d.get("lead_id")})
+    excluded = 0
+    if lead_ids:
+        excluded = _leads().update_many(
+            {"id": {"$in": lead_ids}},
+            {"$set": {
+                # Excluded from future drafting and from the follow-up engine.
+                # Not "rejected": the lead is still real and still worth a
+                # WhatsApp message or a call, it just gets no more cold email.
+                "do_not_email": True,
+                "do_not_email_at": _now(),
+                "followup_opted_out": True,
+                "last_action": "Discarded by CEO — no further outreach emails",
+                "last_action_timestamp": _now(),
+            }},
+        ).modified_count
+
+    return {"ok": True, "rejected": n, "excluded": excluded,
+            "note": (f"{n} draft(s) discarded. {excluded} lead(s) will not be written to again — "
+                     f"undo from the CRM if that was a mistake.")}
 
 
 def _draft_selector(body: DraftDecision) -> dict:
@@ -1393,6 +1430,30 @@ def _draft_selector(body: DraftDecision) -> dict:
     if body.batch_id:
         return {"batch_id": body.batch_id}
     return {"id": "__none__"}
+
+
+class UndoExcludeBody(BaseModel):
+    lead_ids: list[str]
+
+
+@router.post("/leads/allow-email")
+@safe_endpoint("agent3")
+async def allow_email_again(body: UndoExcludeBody):
+    """Undo a discard: let these leads be written to again.
+
+    Discarding is easy to do by accident on a batch, and without this the only
+    way back would be editing the database by hand.
+    """
+    if not body.lead_ids:
+        return {"ok": True, "restored": 0}
+    n = _leads().update_many(
+        {"id": {"$in": body.lead_ids}},
+        {"$unset": {"do_not_email": "", "do_not_email_at": ""},
+         "$set": {"followup_opted_out": False,
+                  "last_action": "Re-enabled for outreach by CEO",
+                  "last_action_timestamp": _now()}},
+    ).modified_count
+    return {"ok": True, "restored": n}
 
 
 @router.post("/drafts/approve-send")
@@ -1758,7 +1819,8 @@ async def _chat_write_emails(cmd: dict) -> dict:
 
     # Confirm the niche actually exists before spending model calls on it. A
     # silent "0 drafted" is the least useful possible answer.
-    query: dict = {"status": "verified", "email": {"$nin": ["", None]}}
+    query: dict = {"status": "verified", "email": {"$nin": ["", None]},
+                   "do_not_email": {"$ne": True}}
     if niche:
         query["niche"] = {"$regex": re.escape(niche), "$options": "i"}
     if city:
@@ -1767,7 +1829,8 @@ async def _chat_write_emails(cmd: dict) -> dict:
 
     if not available:
         known = sorted({(l.get("niche") or "").strip() for l in
-                        _leads().find({"status": "verified", "email": {"$nin": ["", None]}},
+                        _leads().find({"status": "verified", "email": {"$nin": ["", None]},
+                                       "do_not_email": {"$ne": True}},
                                       {"niche": 1})} - {""})
         where = f" in {city}" if city else ""
         target = f"'{niche}'" if niche else "that"

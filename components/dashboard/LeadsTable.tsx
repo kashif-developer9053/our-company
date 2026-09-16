@@ -61,6 +61,7 @@ export default function LeadsTable({ leads, onEdit, onDelete }: Props) {
                   <a href={`tel:${l.phone.replace(/\s+/g, "")}`} className="lead-phone">{l.phone}</a>
                 ) : null}
                 {!l.email && l.phone && <span className="lead-hint">WhatsApp only</span>}
+                {l.do_not_email && <span className="lead-excluded">discarded — no emails</span>}
               </td>
               <td>
                 <LeadStatusBadge status={l.status} />

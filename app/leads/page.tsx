@@ -22,10 +22,11 @@ const FILTERS = [
   // which can actually be emailed decides what outreach is even possible.
   { key: "has_email", label: "Has email" },
   { key: "no_email", label: "Phone only" },
+  { key: "do_not_email", label: "Discarded" },
 ];
 
 // Filters applied in the browser rather than sent to the API as a status.
-const CONTACT_FILTERS = new Set(["has_email", "no_email"]);
+const CONTACT_FILTERS = new Set(["has_email", "no_email", "do_not_email"]);
 
 const blankLead = { business_name: "", niche: "", city: "", email: "", phone: "", status: "new" as string };
 
@@ -54,6 +55,7 @@ export default function LeadsPage() {
     let rows = leads;
     if (filter === "has_email") rows = rows.filter((l) => (l.email || "").trim());
     if (filter === "no_email") rows = rows.filter((l) => !(l.email || "").trim());
+    if (filter === "do_not_email") rows = rows.filter((l) => l.do_not_email);
     if (!query.trim()) return rows;
     const q = query.toLowerCase();
     return rows.filter((l) => l.business_name.toLowerCase().includes(q) || l.niche.toLowerCase().includes(q));

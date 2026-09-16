@@ -103,7 +103,8 @@ def next_step_due(lead: dict, now: datetime | None = None) -> tuple[bool, str, s
 
     if st["replied"]:
         return False, "", "they replied — sequence stopped"
-    if lead.get("followup_opted_out") or lead.get("do_not_contact"):
+    if (lead.get("followup_opted_out") or lead.get("do_not_contact")
+            or lead.get("do_not_email")):
         return False, "", "opted out"
     if st["sent_count"] == 0:
         return False, "", "no first email sent yet"

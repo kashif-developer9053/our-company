@@ -110,6 +110,9 @@ export interface ApiLead {
   has_working_website?: boolean | null;
   email_confidence?: string;
   rejection_reason?: string;
+  // Set when a draft to this lead was discarded: no more outreach emails
+  // and no follow-ups, until explicitly re-enabled.
+  do_not_email?: boolean;
   source?: string;
   discovery_source?: string;
   // Why this lead was collected, backed by a real website audit.
@@ -397,6 +400,10 @@ export const unarchiveReply = (b: ReplyRef) =>
   req<{ ok: boolean }>("/agent3/inbox/unarchive", { method: "POST", body: JSON.stringify(b) });
 export const deleteReply = (b: ReplyRef) =>
   req<{ ok: boolean }>("/agent3/inbox/delete", { method: "POST", body: JSON.stringify(b) });
+export const allowEmailAgain = (lead_ids: string[]) =>
+  req<{ ok: boolean; restored: number }>(
+    "/agent3/leads/allow-email", { method: "POST", body: JSON.stringify({ lead_ids }) });
+
 export const redraftReply = (body: { lead_id: string; received_at: string }) =>
   req<{ ok: boolean; suggested_reply?: string; error?: string }>(
     "/agent3/inbox/redraft-reply", { method: "POST", body: JSON.stringify(body) });
