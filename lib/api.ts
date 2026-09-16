@@ -376,6 +376,10 @@ export interface MailItem {
   status: string; error?: string; edited?: boolean; spam_flags?: string[];
   collection_reason?: string; lead_id?: string; reply_reasoning?: string; suggested_reply?: string;
   read?: boolean; archived?: boolean;
+  // Inbound only: `body` is what they typed with our quoted email removed,
+  // `full_body` is the untouched thread behind a "show original" toggle.
+  full_body?: string;
+  sentiment?: "negative" | "interested" | "question" | "neutral";
 }
 export interface MailCounts {
   drafts: number; sent: number; failed: number; rejected: number;
@@ -393,6 +397,10 @@ export const unarchiveReply = (b: ReplyRef) =>
   req<{ ok: boolean }>("/agent3/inbox/unarchive", { method: "POST", body: JSON.stringify(b) });
 export const deleteReply = (b: ReplyRef) =>
   req<{ ok: boolean }>("/agent3/inbox/delete", { method: "POST", body: JSON.stringify(b) });
+export const redraftReply = (body: { lead_id: string; received_at: string }) =>
+  req<{ ok: boolean; suggested_reply?: string; error?: string }>(
+    "/agent3/inbox/redraft-reply", { method: "POST", body: JSON.stringify(body) });
+
 export const sendInboxReply = (b: ReplyRef & { subject?: string; body: string }) =>
   req<{ ok: boolean; note?: string; error?: string }>("/agent3/inbox/send-reply", { method: "POST", body: JSON.stringify(b) });
 export const getMailbox = (folder: string) =>

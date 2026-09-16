@@ -32,6 +32,9 @@ from .followup import ANGLE_BRIEF as FOLLOWUP_ANGLE_BRIEF
 from .niche_services import audience_for as niche_audience_for
 from .niche_services import services_for as niche_services_for
 from .niche_services import services_line as niche_services_line
+from .reply_text import quick_read as reply_quick_read
+from .reply_text import strip_quoted
+from .reply_text import summarise as reply_summary
 from .suppression import is_suppressed, record_event, suppress as suppress_addr
 from .suppression import stats as suppression_stats
 from .verify_email import verify as verify_address
@@ -1228,6 +1231,29 @@ class InboxReplyBody(BaseModel):
     body: str
 
 
+@router.post("/inbox/redraft-reply")
+@safe_endpoint("agent3")
+async def redraft_reply(body: ReplyActionBody):
+    """Write a fresh suggested reply for one inbound message.
+
+    The stored suggestion is generated once when the reply arrives. This lets
+    the CEO ask for another attempt without waiting for the next inbox cycle.
+    """
+    lead = _leads().find_one({"id": body.lead_id})
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    entry = next((h for h in (lead.get("outreach_history") or [])
+                  if h.get("type") == "reply" and h.get("received_at") == body.received_at), None)
+    if not entry:
+        raise HTTPException(status_code=404, detail="That reply was not found on this lead.")
+
+    suggestion = await _suggest_reply(lead, entry.get("body", ""))
+    if not suggestion:
+        return {"ok": False, "error": "Could not write a reply just now — try again in a moment."}
+    _leads().update_one({"id": body.lead_id}, {"$set": {"suggested_reply": suggestion}})
+    return {"ok": True, "suggested_reply": suggestion}
+
+
 @router.post("/inbox/send-reply")
 @safe_endpoint("agent3")
 async def send_inbox_reply(body: InboxReplyBody):
@@ -1308,10 +1334,16 @@ async def mailbox(folder: str = "drafts", limit: int = 100):
                     "business_name": lead.get("business_name", ""),
                     "to_email": lead.get("email", ""),
                     "subject": h.get("subject", "(reply)"),
-                    "preview": (h.get("body") or "").strip().replace("\n", " ")[:130],
-                    "body": h.get("body", ""), "html": "",
+                    # What they actually typed, with our own quoted email
+                    # removed. A four-word reply was arriving under forty lines
+                    # of our marketing copy and tracking-link footnotes.
+                    "preview": reply_summary(h.get("body") or ""),
+                    "body": strip_quoted(h.get("body") or ""),
+                    "full_body": h.get("body", ""),   # kept for "show original"
+                    "html": "",
                     "at": h.get("received_at", ""),
                     "status": lead.get("reply_classification") or "replied",
+                    "sentiment": reply_quick_read(h.get("body") or ""),
                     "lead_id": lead["id"],
                     "reply_reasoning": lead.get("reply_reasoning", ""),
                     "suggested_reply": lead.get("suggested_reply", ""),
@@ -1515,13 +1547,52 @@ async def _classify(reply_body: str) -> dict:
         return {"ok": True, "category": "unclear", "reasoning": txt[:200]}
 
 
+REPLY_SYSTEM = (
+    "You write the reply to a prospect who answered a cold email. One person "
+    "writing back to another — not a template.\n\n"
+    "THE ONE RULE: answer what THEY actually said. Quote their own words back "
+    "where it helps. If they asked a question, answer it first, before anything "
+    "else. If they said no, accept it gracefully and stop selling.\n\n"
+    "HOW TO HANDLE EACH KIND OF REPLY:\n"
+    "- Not interested / no need: thank them, confirm you will not write again, "
+    "leave one warm line in case things change later. NO pitch, no 'but before "
+    "you go', no alternatives offered. Two or three lines total.\n"
+    "- Asking the price: give a range only if the brief supplies one, otherwise "
+    "say honestly that it depends on scope and ask the two questions you need "
+    "answered to quote. Never invent a figure.\n"
+    "- Asking what we do: answer plainly in their industry's words, tied to "
+    "what their business would use it for.\n"
+    "- Interested / wants to talk: propose one concrete next step — a short "
+    "call — and ask when suits. Do not re-pitch what they have already bought into.\n"
+    "- Unclear: ask one clarifying question. Do not guess and pitch.\n\n"
+    "STYLE: 40-90 words. Plain sentences, contractions, no corporate filler. No "
+    "greeting line and no sign-off — those are added automatically. Never invent "
+    "prices, timelines, names or features. Output the reply body only."
+)
+
+
 async def _suggest_reply(lead: dict, reply_body: str) -> str:
+    """Draft a reply that answers what the prospect actually wrote.
+
+    The raw IMAP body carries our own quoted email underneath theirs, so this
+    was being handed our marketing copy as if the prospect had written it and
+    replied to that instead of to them.
+    """
+    clean = strip_quoted(reply_body)
+    mood = reply_quick_read(reply_body)
+    systems = niche_services_line(lead.get("niche", ""), limit=3)
     prompt = (
-        f"Lead {lead.get('business_name')} ({lead.get('niche')}) replied to your cold email:\n\n"
-        f"\"{reply_body[:1500]}\"\n\nWrite a short, friendly, helpful reply. Body only, no subject."
+        f"THEIR REPLY (this is what you must respond to):\n\"{clean[:1500]}\"\n\n"
+        f"WHO THEY ARE: {lead.get('business_name')} — {lead.get('niche','')}"
+        f"{' in ' + lead.get('city') if lead.get('city') else ''}\n"
+        f"HOW THEIR REPLY READS: {mood}\n"
+        f"WHAT WE COULD BUILD FOR THIS INDUSTRY (mention ONLY if they asked what "
+        f"we do, or showed interest): {systems}\n\n"
+        f"Write the reply body only."
     )
-    res = await agent_task("agent3", prompt, max_tokens=400, purpose="reply")
-    return res["text"] if res["ok"] else ""
+    res = await agent_task("agent3", prompt, max_tokens=400, purpose="reply",
+                           draft_instructions=REPLY_SYSTEM)
+    return res["text"].strip() if res["ok"] else ""
 
 
 async def run_reply_check() -> dict:
@@ -1559,15 +1630,21 @@ async def run_reply_check() -> dict:
             # Store the raw reply on the lead.
             _leads().update_one({"id": lead["id"]}, {"$push": {"outreach_history": {"type": "reply", "body": r["body"], "received_at": r["received_at"]}}})
             # Classify.
-            cls = await _classify(r["body"])
+            # Classify what THEY wrote, not our quoted email underneath it.
+            cls = await _classify(strip_quoted(r["body"]))
             if not cls["ok"]:
                 _leads().update_one({"id": lead["id"]}, {"$set": {"status": "replied", "reply_reasoning": "classification unavailable", "last_action": "Reply received (unclassified)", "last_action_timestamp": _now()}})
                 processed += 1
                 continue
             if cls["category"] == "negative":
+                # Still draft a short, graceful acknowledgement. Leaving a "no"
+                # unanswered is rude, and a courteous close is what keeps the
+                # door open for later.
+                suggestion = await _suggest_reply(lead, r["body"])
                 _leads().update_one({"id": lead["id"]}, {"$set": {
                     "status": "not_interested", "reply_classification": "negative", "reply_reasoning": cls["reasoning"],
-                    "last_action": "Auto-closed: reply classified negative", "last_action_timestamp": _now()}})
+                    "suggested_reply": suggestion, "followup_opted_out": True,
+                    "last_action": "Not interested — acknowledgement drafted", "last_action_timestamp": _now()}})
             else:
                 suggestion = await _suggest_reply(lead, r["body"])
                 _leads().update_one({"id": lead["id"]}, {"$set": {

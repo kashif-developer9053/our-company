@@ -50,6 +50,9 @@ export default function Mailbox({ onChanged }: { onChanged?: () => void }) {
   const [msg, setMsg] = useState<string | null>(null);
   const [replying, setReplying] = useState(false);
   const [replyText, setReplyText] = useState("");
+  // Replies arrive with our own email quoted underneath. The clean text is
+  // shown by default; this reveals the untouched thread on request.
+  const [showOriginal, setShowOriginal] = useState(false);
   const [count, setCount] = useState(10);
   // Campaign filters: write to one city / industry at a time.
   const [city, setCity] = useState("");
@@ -103,6 +106,19 @@ export default function Mailbox({ onChanged }: { onChanged?: () => void }) {
     setBusy("del");
     try { await api.deleteReply(replyRef(i)); setMsg("Deleted."); await load(folder); }
     catch (e) { setMsg(`⚠ ${(e as Error).message}`); }
+    finally { setBusy(null); }
+  };
+
+  // Ask Agent 3 for a fresh draft against the same message — useful when the
+  // first suggestion missed the point, or after editing has wandered.
+  const redraft = async (i: MailItem) => {
+    if (!i.lead_id) return;
+    setBusy("redraft"); setMsg(null);
+    try {
+      const r = await api.redraftReply({ lead_id: i.lead_id, received_at: i.at });
+      if (r.ok && r.suggested_reply) { setReplyText(r.suggested_reply); setMsg("Rewritten."); }
+      else setMsg(`⚠ ${r.error || "Could not rewrite."}`);
+    } catch (e) { setMsg(`⚠ ${(e as Error).message}`); }
     finally { setBusy(null); }
   };
 
@@ -278,6 +294,22 @@ export default function Mailbox({ onChanged }: { onChanged?: () => void }) {
               )}
             </div>
 
+            {open.kind === "inbound" && open.sentiment && (
+              <div className="mb-sentiment">
+                <span className={`mb-mood mb-mood-${open.sentiment}`}>
+                  {open.sentiment === "negative" ? "Not interested"
+                    : open.sentiment === "interested" ? "Interested"
+                    : open.sentiment === "question" ? "Asked a question"
+                    : "Neutral"}
+                </span>
+                {open.full_body && open.full_body !== open.body && (
+                  <button className="mb-linkbtn" onClick={() => setShowOriginal(!showOriginal)}>
+                    {showOriginal ? "Hide quoted email" : "Show full thread"}
+                  </button>
+                )}
+              </div>
+            )}
+
             {open.kind === "inbound" && (
               <div className="pending-actions" style={{ marginBottom: 12 }}>
                 <button className="btn-mini primary" disabled={busy === "reply"}
@@ -299,10 +331,22 @@ export default function Mailbox({ onChanged }: { onChanged?: () => void }) {
                 <textarea className="af-input" rows={8} value={replyText}
                   onChange={(e) => setReplyText(e.target.value)}
                   placeholder="Type your reply…" />
-                <button className="btn-mini primary" disabled={busy === "reply"}
-                  onClick={() => doSendReply(open)}>
-                  {busy === "reply" ? "Sending…" : "Send reply"}
-                </button>
+                <div className="mb-replybar">
+                  <button className="btn-mini primary" disabled={busy === "reply"}
+                    onClick={() => doSendReply(open)}>
+                    {busy === "reply" ? "Sending…" : "Send reply"}
+                  </button>
+                  {open.suggested_reply && (
+                    <button className="btn-mini" type="button"
+                      onClick={() => setReplyText(open.suggested_reply || "")}>
+                      Reset to suggestion
+                    </button>
+                  )}
+                  <button className="btn-mini" type="button" disabled={busy === "redraft"}
+                    onClick={() => redraft(open)}>
+                    {busy === "redraft" ? "Writing…" : "Rewrite for me"}
+                  </button>
+                </div>
                 {open.suggested_reply && (
                   <p className="muted small" style={{ margin: 0 }}>
                     Pre-filled with Agent 3&apos;s suggestion — edit it before sending.
@@ -329,7 +373,11 @@ export default function Mailbox({ onChanged }: { onChanged?: () => void }) {
             ) : open.kind === "outbound" && view === "design" && open.html ? (
               <iframe className="mb-preview" title="Email preview" sandbox="" srcDoc={open.html} />
             ) : (
-              <pre className="draft-text">{open.body}</pre>
+              <pre className="draft-text">
+                {open.kind === "inbound" && showOriginal && open.full_body
+                  ? open.full_body
+                  : open.body}
+              </pre>
             )}
 
             {isDrafts && !editing && (
