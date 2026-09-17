@@ -22,6 +22,27 @@ from supervisor.supervisor_routes import review_niches
 from .niche_model import NicheRequest, parse_niches, parse_result, serialize
 
 log = get_logger("agent1")
+
+
+def _evidence_block() -> str:
+    """What our own outreach already proved, fed into the niche prompt.
+
+    Without this the model keeps re-suggesting niches we have already worked
+    and rejected: it has no memory of the 45 emails to schools that produced
+    one reply, or the solicitors whose leads were discarded 75% of the time.
+    Our own results outrank any general reasoning about a market.
+    """
+    try:
+        from .niche_performance import briefing
+        text = briefing()
+    except Exception as exc:  # noqa: BLE001 - never block niche generation
+        log.warning("Could not build niche evidence (isolated): %s", exc)
+        return ""
+    if not text:
+        return ""
+    return ("EVIDENCE FROM OUR OWN OUTREACH — this outranks general market "
+            "reasoning, because it is what actually happened to us:\n"
+            f"{text}\n\n")
 router = APIRouter(prefix="/agent1", tags=["agent1"])
 
 SYSTEM = (
@@ -85,6 +106,7 @@ async def find_niches(body: NicheRequest):
         where = f"{industry_in} in {city_in + ', ' if city_in else ''}{country_in}"
         prompt = (
             f"Industry/region: {where}.\n"
+            f"{_evidence_block()}"
             "Return ONLY a JSON array of 3-4 objects, each exactly "
             '{"niche_name": string, "reasoning": string}. No text outside the JSON.'
         )
@@ -120,6 +142,7 @@ async def find_niches(body: NicheRequest):
             )
         prompt = (
             f"{constraint}\n\n"
+            f"{_evidence_block()}"
             "Then, within that space, identify 3 to 4 non-obvious, underserved niche opportunities, "
             "each with a short explanation of why it's an opportunity.\n"
             "Every niche must name a TYPE OF BUSINESS THAT BUYS software (e.g. 'dental clinics', "
@@ -232,6 +255,20 @@ class HarvestBody(BaseModel):
     # counts leads ALREADY held for the niche, so a second run tops the pile up
     # to `target` instead of trying to find `target` more from scratch.
     continue_niche: bool = False
+
+
+@router.get("/niche-performance")
+@safe_endpoint("agent1")
+async def niche_performance():
+    """What our own outreach proved about each niche we have worked.
+
+    Exposed so the verdicts are inspectable rather than just silently shaping
+    the next suggestion — if the system stops recommending a niche, the reason
+    should be visible.
+    """
+    from .niche_performance import avoid_list, proven_list, ranked
+    return {"ok": True, "ranked": ranked(),
+            "proven": proven_list(), "avoid": avoid_list()}
 
 
 @router.post("/harvest-leads")
