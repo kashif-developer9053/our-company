@@ -1356,26 +1356,39 @@ async def mailbox(folder: str = "drafts", limit: int = 100):
         items.sort(key=lambda x: x.get("at", ""), reverse=True)
         items = items[:limit]
 
+    # One grouped pass instead of five count_documents calls. Each of those was
+    # a separate round trip to Atlas — ~240ms away — and an unindexed scan of
+    # every draft, which is most of why opening the mailbox took ~3 seconds.
+    by_status = {d["_id"]: d["n"] for d in _drafts().aggregate(
+        [{"$group": {"_id": "$status", "n": {"$sum": 1}}}])}
     counts = {
-        "drafts": _drafts().count_documents({"status": "pending"}),
-        "sent": _drafts().count_documents({"status": "sent"}),
-        "failed": _drafts().count_documents({"status": "failed"}),
-        "rejected": _drafts().count_documents({"status": "rejected"}),
-        "queued": _drafts().count_documents({"status": "approved"}),
+        "drafts": by_status.get("pending", 0),
+        "sent": by_status.get("sent", 0),
+        "failed": by_status.get("failed", 0),
+        "rejected": by_status.get("rejected", 0),
+        "queued": by_status.get("approved", 0),
         "inbox": 0, "archive": 0, "unread": 0,
     }
-    # Reply counts need a scan because the flags live inside outreach_history.
-    for lead in _leads().find({"outreach_history.type": "reply"},
-                              {"outreach_history": 1}).limit(300):
-        for h in lead.get("outreach_history", []):
-            if h.get("type") != "reply" or h.get("deleted"):
-                continue
-            if h.get("archived"):
-                counts["archive"] += 1
-            else:
-                counts["inbox"] += 1
-                if not h.get("read"):
-                    counts["unread"] += 1
+    # Reply flags live inside outreach_history, so counting them needs a scan.
+    # Doing it in the database avoids shipping every lead's full history —
+    # including the email bodies — across the Atlas connection just to count.
+    for row in _leads().aggregate([
+        {"$match": {"outreach_history.type": "reply"}},
+        {"$unwind": "$outreach_history"},
+        {"$match": {"outreach_history.type": "reply",
+                    "outreach_history.deleted": {"$ne": True}}},
+        {"$group": {
+            "_id": None,
+            "archive": {"$sum": {"$cond": ["$outreach_history.archived", 1, 0]}},
+            "inbox": {"$sum": {"$cond": ["$outreach_history.archived", 0, 1]}},
+            "unread": {"$sum": {"$cond": [
+                {"$and": [{"$not": ["$outreach_history.archived"]},
+                          {"$not": ["$outreach_history.read"]}]}, 1, 0]}},
+        }},
+    ]):
+        counts["archive"] = row.get("archive", 0)
+        counts["inbox"] = row.get("inbox", 0)
+        counts["unread"] = row.get("unread", 0)
     return {"ok": True, "folder": folder, "items": items, "counts": counts}
 
 

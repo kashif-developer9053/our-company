@@ -70,9 +70,14 @@ def collect() -> dict[str, dict]:
         lambda: {"leads": 0, "sent": 0, "replied": 0, "discarded": 0,
                  "emailable": 0, "interested": 0})
 
+    # "Did this lead ever reply?" is all we need, so ask the database rather
+    # than shipping every lead's full outreach_history — email bodies included
+    # — across the connection just to test one flag.
+    replied_ids = {d["id"] for d in db["leads"].find(
+        {"outreach_history.type": "reply"}, {"id": 1})}
+
     for lead in db["leads"].find({}, {
-            "id": 1, "niche": 1, "email": 1, "status": 1,
-            "do_not_email": 1, "outreach_history": 1}):
+            "id": 1, "niche": 1, "email": 1, "status": 1, "do_not_email": 1}):
         niche = _norm(lead.get("niche"))
         if not niche or niche == "?" or _unusable_niche(niche):
             continue
@@ -84,8 +89,7 @@ def collect() -> dict[str, dict]:
             s["discarded"] += 1
         if lead.get("id") in sent_ids:
             s["sent"] += 1
-        history = lead.get("outreach_history") or []
-        if any(h.get("type") == "reply" for h in history):
+        if lead.get("id") in replied_ids:
             s["replied"] += 1
         if lead.get("status") == "interested_awaiting_review":
             s["interested"] += 1
@@ -139,8 +143,22 @@ def score_niche(s: dict) -> tuple[float, list[str]]:
     return score, why
 
 
-def ranked() -> list[dict]:
-    """Every niche we have worked, best first, with the reasoning."""
+_CACHE: dict = {"at": 0.0, "rows": None}
+_CACHE_TTL = 300  # seconds
+
+
+def ranked(force: bool = False) -> list[dict]:
+    """Every niche we have worked, best first, with the reasoning.
+
+    Cached: collect() walks every lead and its outreach history, which is
+    several seconds against a remote cluster, and these verdicts shift over
+    days rather than seconds. Called on every niche suggestion and by the
+    dashboard, so recomputing each time made both feel broken.
+    """
+    import time as _time
+    if not force and _CACHE["rows"] is not None and _time.time() - _CACHE["at"] < _CACHE_TTL:
+        return _CACHE["rows"]
+
     out = []
     for niche, s in collect().items():
         score, why = score_niche(s)
@@ -153,6 +171,8 @@ def ranked() -> list[dict]:
                          or s["leads"] >= _MIN_LEADS_FOR_DISCARD_SIGNAL,
         })
     out.sort(key=lambda x: -x["score"])
+    _CACHE["rows"] = out
+    _CACHE["at"] = __import__("time").time()
     return out
 
 

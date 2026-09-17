@@ -55,7 +55,7 @@ from notifications.notifications_routes import router as notifications_router  #
 from pipeline.pipeline_routes import router as pipeline_router  # noqa: E402
 from shared.instructions import seed_instructions  # noqa: E402
 from settings.settings_routes import router as settings_router  # noqa: E402
-from shared.database import backend_name  # noqa: E402
+from shared.database import backend_name, ensure_indexes  # noqa: E402
 from shared.logger import get_logger  # noqa: E402
 from shared.safe_wrapper import safe_endpoint  # noqa: E402
 from shared.security import encryption_secret_is_set  # noqa: E402
@@ -76,6 +76,28 @@ async def _reply_check_loop():
             await run_reply_check()
         except Exception as exc:  # noqa: BLE001
             log.error("Reply-check loop error (isolated): %s", exc)
+
+
+async def _prune_loop():
+    """Drop old monitoring rows daily.
+
+    health_checks reached 11,000 documents from a 3-minute polling loop. It is
+    diagnostic history nobody reads past a fortnight, and it makes every scan
+    of that collection slower for no benefit.
+    """
+    import asyncio
+    from datetime import datetime, timedelta, timezone
+    await asyncio.sleep(600)
+    while True:
+        try:
+            from shared.database import get_db as _gdb
+            cut = (datetime.now(timezone.utc) - timedelta(days=14)).isoformat()
+            n = _gdb()["health_checks"].delete_many({"created_at": {"$lt": cut}}).deleted_count
+            if n:
+                log.info("Pruned %d health_check rows older than 14 days.", n)
+        except Exception as exc:  # noqa: BLE001
+            log.error("Prune loop error (isolated): %s", exc)
+        await asyncio.sleep(24 * 3600)
 
 
 async def _health_check_loop():
@@ -161,10 +183,14 @@ async def lifespan(app: FastAPI):
     seed_defaults()
     seed_leads()
     seed_instructions()
+    # email_drafts had no indexes at all, so every mailbox open was a
+    # full collection scan against an Atlas cluster ~240ms away.
+    ensure_indexes()
     task = asyncio.create_task(_reply_check_loop())
     health_task = asyncio.create_task(_health_check_loop())
     followup_task = asyncio.create_task(_followup_loop())
     queued_task = asyncio.create_task(_queued_send_loop())
+    prune_task = asyncio.create_task(_prune_loop())
     log.info(
         "Backend ready | storage=%s | encryption_secret_set=%s",
         backend_name(),
@@ -175,6 +201,7 @@ async def lifespan(app: FastAPI):
     health_task.cancel()
     followup_task.cancel()
     queued_task.cancel()
+    prune_task.cancel()
 
 
 app = FastAPI(title="AI Agency Virtual Office — Backend", version="2.0", lifespan=lifespan)

@@ -108,3 +108,46 @@ def backend_name() -> str:
     if _backend is None:
         _connect()
     return _backend or "unknown"
+
+
+# Indexes the app depends on. `email_drafts` had none at all, so every mailbox
+# open ran full collection scans — and with Atlas ~240ms away, each of those
+# round trips is expensive. Created on startup and idempotent: MongoDB ignores
+# a create_index call for an index that already exists.
+_INDEXES: dict[str, list] = {
+    "email_drafts": [
+        ([("status", 1)], {}),
+        ([("lead_id", 1)], {}),
+        ([("batch_id", 1)], {}),
+        ([("id", 1)], {"unique": True}),
+        ([("status", 1), ("created_at", -1)], {}),
+    ],
+    "leads": [
+        ([("do_not_email", 1)], {}),
+        ([("niche", 1)], {}),
+        ([("city", 1)], {}),
+        ([("outreach_history.type", 1)], {}),
+        ([("status", 1), ("email", 1)], {}),
+    ],
+    "email_events": [([("email", 1)], {}), ([("at", -1)], {})],
+    "suppressed": [([("reason", 1)], {})],
+    "health_checks": [([("created_at", -1)], {})],
+    "activity_events": [([("created_at", -1)], {})],
+}
+
+
+def ensure_indexes() -> dict:
+    """Create the indexes the app relies on. Never raises — a missing index
+    makes things slow, but failing to start makes them unusable."""
+    created, failed = 0, 0
+    db = get_db()
+    for collection, specs in _INDEXES.items():
+        for keys, opts in specs:
+            try:
+                db[collection].create_index(keys, background=True, **opts)
+                created += 1
+            except Exception as exc:  # noqa: BLE001
+                failed += 1
+                log.warning("Index on %s %s failed (isolated): %s", collection, keys, exc)
+    log.info("Index check complete: %d ensured, %d failed.", created, failed)
+    return {"ensured": created, "failed": failed}
