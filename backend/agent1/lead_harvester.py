@@ -22,6 +22,7 @@ from shared.logger import get_logger
 from .contact_enrichment import enrich_lead_emails
 from .scraper import scrape_google_maps
 from .site_auditor import audit_leads
+from .social_miner import discover_social_businesses
 from .website_miner import mine_business_websites
 
 log = get_logger("agent1.harvester")
@@ -228,6 +229,19 @@ async def harvest_leads(
                 fresh.extend(mined.get("leads", []))
         except Exception as exc:  # noqa: BLE001
             log.error("Web mining round failed (isolated): %s", exc)
+        # 3) Businesses that exist only on Facebook/Instagram. Maps and the web
+        #    crawler both assume a website, so these were invisible — yet "no
+        #    website at all" is the strongest pitch we have. Run once per hunt
+        #    rather than per round: the queries do not vary by template and the
+        #    engines throttle quickly.
+        if rounds_run == 1:
+            try:
+                social = await discover_social_businesses(niche, where, max_results=_PER_ROUND)
+                if social.get("ok") and social.get("leads"):
+                    fresh.extend(social["leads"])
+                    say(f"Social search added {len(social['leads'])} businesses with no website.")
+            except Exception as exc:  # noqa: BLE001
+                log.error("Social mining failed (isolated): %s", exc)
 
         # Drop anything already collected in a previous run or round.
         raw_count = len(fresh)

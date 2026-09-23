@@ -77,6 +77,10 @@ _EXCLUDED_DISCOVERY_DOMAINS = {
 
 # Words that mean the page is ABOUT businesses rather than being one.
 _NON_BUSINESS_NAME_HINTS = (
+    # Platform chrome scraped from social search results as if it were a
+    # business name: "Facebook", "Share", "Watch", and similar.
+    "facebook", "instagram", "share", "watch video", "see more",
+    "view profile", "follow", "message", "photos", "videos", "reels",
     "stack overflow", "stack exchange", "find answers", "unspecified",
     "sign in", "log in", "register", "search results", "job search",
     "select your interest", "cookie", "privacy policy", "terms of service",
