@@ -2,19 +2,26 @@
 
 import { useCallback, useEffect, useState } from "react";
 import * as api from "@/lib/api";
-import type { Deliverability } from "@/lib/api";
+import type { Deliverability, EngagementSummary } from "@/lib/api";
 
 // Bounce rate is the number that decides whether the sending domain survives.
 // Before this panel existed, 58 guessed addresses had been mailed with no
 // visibility at all into whether any of them bounced.
 export default function DeliverabilityPanel() {
   const [d, setD] = useState<Deliverability | null>(null);
+  // Opens and clicks come from Brevo, not our own logs — they are the only
+  // way to tell "nobody read it" from "they read it and were not convinced".
+  const [eng, setEng] = useState<EngagementSummary | null>(null);
   const [hook, setHook] = useState<string>("");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try { setD(await api.getDeliverability(30)); } catch { /* backend down */ }
+    try {
+      await api.syncEngagement(30);
+      setEng(await api.getEngagementSummary(30));
+    } catch { /* Brevo unreachable — panel still renders delivery stats */ }
   }, []);
   useEffect(() => { load(); }, [load]);
 
@@ -62,6 +69,36 @@ export default function DeliverabilityPanel() {
           <span className="dl-lbl">Suppressed</span>
         </div>
       </div>
+
+      {eng?.ok && (
+        <>
+          <div className="dl-grid" style={{ marginTop: 8 }}>
+            <div className="dl-stat">
+              <span className="dl-val">{eng.opened}</span>
+              <span className="dl-lbl">Opened ({eng.open_rate_pct}%)</span>
+            </div>
+            <div className="dl-stat">
+              <span className="dl-val">{eng.clicked}</span>
+              <span className="dl-lbl">Clicked ({eng.click_rate_pct}%)</span>
+            </div>
+            <div className="dl-stat">
+              <span className="dl-val">{eng.spam_reports}</span>
+              <span className="dl-lbl">Spam reports</span>
+            </div>
+            <div className="dl-stat">
+              <span className="dl-val">{eng.unsubscribed}</span>
+              <span className="dl-lbl">Unsubscribed</span>
+            </div>
+          </div>
+          <p className="dl-note">
+            {eng.open_rate_pct >= 20 && eng.click_rate_pct < 3
+              ? "People are opening these and not acting — the targeting or the offer is the problem, not deliverability."
+              : eng.open_rate_pct < 10
+              ? "Low open rate — subject lines or sender reputation are worth looking at."
+              : "Open and click rates look healthy."}
+          </p>
+        </>
+      )}
 
       <p className="dl-note">
         {risky

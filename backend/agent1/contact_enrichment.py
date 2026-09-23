@@ -26,7 +26,20 @@ _FREE_EMAIL_DOMAINS = {
 }
 _PLACEHOLDER_DOMAINS = {"example.com", "email.com", "domain.com", "yourdomain.com"}
 _BAD_EMAIL_SUFFIXES = (".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".css", ".js")
-_PREFERRED_LOCALS = ("info", "contact", "hello", "office", "admin", "accounts", "sales", "support")
+# Shared inboxes nobody owns. These were previously RANKED FIRST, so a site
+# listing both owner@ and info@ always yielded info@ — and 350 of 511 collected
+# addresses ended up being one. A role inbox gets opened and then nobody feels
+# responsible for replying, which is most of why opens never became replies.
+# Now ranked LAST: still collected, because for many small businesses it is the
+# only address published, but always beaten by a real person.
+_ROLE_LOCALS = ("info", "contact", "hello", "office", "admin", "accounts",
+                "sales", "support", "enquiries", "enquiry", "mail", "reception",
+                "help", "team", "general", "post", "email", "customercare",
+                "orders", "booking", "bookings", "service")
+
+# Addresses that reach a decision maker. A named person outranks everything.
+_PREFERRED_LOCALS = ("owner", "ceo", "director", "principal", "founder",
+                     "manager", "md", "partner", "head")
 
 
 class _ContactParser(HTMLParser):
@@ -126,13 +139,22 @@ def _select_email(emails: set[str], expected_domain: str) -> str:
     def rank(email: str) -> tuple[int, int, str]:
         local, domain = email.rsplit("@", 1)
         domain_rank = 0 if domain == expected_domain or domain.endswith(f".{expected_domain}") else 1
-        try:
-            local_rank = _PREFERRED_LOCALS.index(local)
-        except ValueError:
-            local_rank = len(_PREFERRED_LOCALS)
+        # Three tiers: a named decision maker, then anything personal-looking,
+        # then the shared inboxes nobody answers.
+        if local in _PREFERRED_LOCALS:
+            local_rank = 0
+        elif local in _ROLE_LOCALS:
+            local_rank = 2
+        else:
+            local_rank = 1          # e.g. ahmed.khan@, dr.saeed@
         return domain_rank, local_rank, email
 
     return sorted(set(usable), key=rank)[0]
+
+
+def is_role_address(email: str) -> bool:
+    """True for a shared inbox like info@ that no individual owns."""
+    return (email or "").split("@")[0].strip().lower() in _ROLE_LOCALS
 
 
 async def discover_public_email(website: str, client: httpx.AsyncClient | None = None) -> str:
@@ -165,7 +187,10 @@ async def discover_public_email(website: str, client: httpx.AsyncClient | None =
             parser.feed(html)
             found.update(parser.emails)
             selected = _select_email(found, expected_domain)
-            if selected:
+            # Only stop early for a real person. Returning on the first hit
+            # meant a homepage info@ won before the contact or team page — where
+            # the owner's address usually is — was ever fetched.
+            if selected and not is_role_address(selected):
                 return selected
             for href in parser.links:
                 candidate = urljoin(url, href)
@@ -205,6 +230,9 @@ async def enrich_lead_emails(leads: list[dict], concurrency: int = 4) -> int:
                 lead["email"] = email
                 lead["email_confidence"] = "found"
                 lead["email_source"] = "public_website"
+                # Recorded so outreach can work the named contacts first: a
+                # shared inbox gets opened and then nobody replies.
+                lead["is_role_email"] = is_role_address(email)
                 enriched += 1
 
         await asyncio.gather(*(enrich(lead) for lead in leads))

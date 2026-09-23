@@ -1591,3 +1591,19 @@ body {
   color: #e08f8f;
   margin-top: 2px;
 }
+
+/* Open/click status on a sent email. Brevo tracked this all along and the
+   app never showed it, so "sent" was all anyone could see. */
+.mb-eng {
+  display: inline-block;
+  margin-top: 3px;
+  font-size: 10.5px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid #2a3346;
+  color: #8a93a6;
+}
+.mb-eng-opened     { color: #7fb2ea; border-color: #2f4a6d; }
+.mb-eng-clicked    { color: #8fe000; border-color: #4a5c20; background: rgba(143,224,0,.08); }
+.mb-eng-bounced    { color: #e08f8f; border-color: #5c3030; }
+.mb-eng-complained { color: #e08f8f; border-color: #5c3030; }

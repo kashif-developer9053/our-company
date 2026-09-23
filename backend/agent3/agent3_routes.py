@@ -28,6 +28,8 @@ from shared.settings_store import get_config, get_icp
 
 from .chat_commands import parse as parse_chat_command
 from .email_designer import render_email_html, render_email_lite
+from .engagement import summary as engagement_overview
+from .engagement import sync_engagement
 from .followup import ANGLE_BRIEF as FOLLOWUP_ANGLE_BRIEF
 from .niche_services import audience_for as niche_audience_for
 from .niche_services import services_for as niche_services_for
@@ -672,6 +674,10 @@ async def draft_batch(body: DraftBatchBody):
         # (highest opportunity score). Leads with no findings give the writer
         # nothing concrete to say, so they go last.
         candidates.sort(key=lambda d: (
+            # A named person before a shared inbox. info@ gets opened and then
+            # nobody feels responsible for replying, which is most of why opens
+            # were not becoming replies.
+            not d.get("is_role_email", False),
             # A confirmed address first: a bounce costs more than a weak pitch.
             (d.get("email_confidence") or "") in ("found", "published"),
             bool((d.get("site_audit") or {}).get("findings")),
@@ -829,6 +835,21 @@ async def brevo_webhook(secret: str, payload: dict):
 async def webhook_url():
     """The URL to paste into Brevo. Shown once in Settings; treat it as a secret."""
     return {"ok": True, "path": f"/api/agent3/hooks/brevo/{_webhook_secret()}"}
+
+
+@router.post("/engagement/sync")
+@safe_endpoint("agent3")
+async def engagement_sync(days: int = 14):
+    """Pull open/click events from Brevo onto each sent draft."""
+    return await asyncio.to_thread(sync_engagement, days)
+
+
+@router.get("/engagement/summary")
+@safe_endpoint("agent3")
+async def engagement_summary(days: int = 30):
+    """Headline open and click rates — the gap between opened and replied is
+    what says whether the problem is reaching people or convincing them."""
+    return await asyncio.to_thread(engagement_overview, days)
 
 
 @router.get("/deliverability")
@@ -1319,6 +1340,9 @@ async def mailbox(folder: str = "drafts", limit: int = 100):
                 "at": d.get("sent_at") or d.get("created_at", ""),
                 "status": d.get("status"), "error": d.get("error", ""),
                 "edited": bool(d.get("edited")), "spam_flags": d.get("spam_flags", []),
+                # From Brevo: delivered / opened / clicked / bounced.
+                "engagement": d.get("engagement", ""),
+                "engagement_at": d.get("engagement_at", ""),
                 "collection_reason": d.get("collection_reason", ""),
             })
     elif folder in ("inbox", "archive"):

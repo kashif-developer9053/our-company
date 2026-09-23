@@ -261,6 +261,17 @@ export default function Mailbox({ onChanged }: { onChanged?: () => void }) {
               </span>
               <span className="mb-row-subject">{i.subject}</span>
               <span className="mb-row-preview">{i.preview}</span>
+              {/* Whether the recipient actually engaged. "Sent" alone made a
+                  message read three times look the same as one binned. */}
+              {i.engagement && (
+                <span className={`mb-eng mb-eng-${i.engagement}`}>
+                  {i.engagement === "clicked" ? "✓ clicked a link"
+                    : i.engagement === "opened" ? "✓ opened"
+                    : i.engagement === "bounced" ? "✗ bounced"
+                    : i.engagement === "complained" ? "✗ marked spam"
+                    : "delivered"}
+                </span>
+              )}
             </span>
           </button>
         ))}

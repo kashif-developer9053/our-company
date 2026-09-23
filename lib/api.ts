@@ -364,6 +364,17 @@ export interface Deliverability {
   hard_bounces: number; soft_bounces: number; bounce_rate_pct: number;
   suppressed_total: number; safe_to_scale: boolean;
 }
+export interface EngagementSummary {
+  ok: boolean; days: number; sent: number; delivered: number; opened: number;
+  clicked: number; hard_bounces: number; spam_reports: number;
+  unsubscribed: number; open_rate_pct: number; click_rate_pct: number;
+}
+export const getEngagementSummary = (days = 30) =>
+  req<EngagementSummary>(`/agent3/engagement/summary?days=${days}`);
+export const syncEngagement = (days = 14) =>
+  req<{ ok: boolean; events?: number; drafts_updated?: number; error?: string }>(
+    `/agent3/engagement/sync?days=${days}`, { method: "POST" });
+
 export const getDeliverability = (days = 30) =>
   req<{ ok: boolean } & Deliverability>(`/agent3/deliverability?days=${days}`);
 export const getWebhookUrl = () =>
@@ -382,6 +393,9 @@ export interface MailItem {
   // Inbound only: `body` is what they typed with our quoted email removed,
   // `full_body` is the untouched thread behind a "show original" toggle.
   full_body?: string;
+  // From Brevo: whether this sent email was delivered, opened or clicked.
+  engagement?: "delivered" | "opened" | "clicked" | "bounced" | "complained" | "";
+  engagement_at?: string;
   sentiment?: "negative" | "interested" | "question" | "neutral";
 }
 export interface MailCounts {
