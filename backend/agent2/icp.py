@@ -102,7 +102,74 @@ def classify(lead: dict) -> tuple[str, str]:
     if m:
         return "competitor", f"appears to sell IT/web services ({m.group(0).strip()})"
 
+    too_big, why = _already_well_served(lead)
+    if too_big:
+        return "too_big", why
+
     return "keep", ""
+
+
+# Companies large enough to have an in-house team or an agency on retainer.
+# Outfitters and the PCB shop both reached the outreach queue: they will never
+# hire us, and the email costs sender reputation for nothing.
+#
+# Matched on the whole name with word boundaries, never a bare substring —
+# "NISHAT Medical & Super Store" and "Honda Care Workshop" are small local
+# shops that merely borrow a famous word, and they are exactly the prospects
+# we want. So the pattern requires the brand to stand alone or head the name.
+_BIG_BRANDS = (
+    r"outfitters?", r"pakistan cricket board", r"\bpcb\b", r"gul ahmed", r"khaadi",
+    r"sapphire (?:textile|retail|mills)", r"nishat (?:mills|linen|group|chunian)",
+    r"bata", r"servis (?:industries|shoes)", r"unilever", r"nestl[eé]", r"telenor",
+    r"jazz(?:\s|$)", r"ufone", r"zong", r"habib bank", r"\bhbl\b", r"\bubl\b", r"\bmcb\b",
+    r"meezan bank", r"allied bank", r"askari bank", r"standard chartered", r"faysal bank",
+    r"packages limited", r"engro", r"fauji (?:foods|fertilizer|cement)", r"lucky cement",
+    r"interwood", r"dawlance", r"haier", r"orient group", r"\bpel\b", r"waves",
+    r"honda atlas", r"toyota indus", r"pak suzuki", r"mcdonald", r"\bkfc\b",
+    r"pizza hut", r"hardee", r"daraz", r"foodpanda", r"careem", r"bykea",
+    r"easypaisa", r"jazzcash", r"\bptcl\b", r"\bnadra\b", r"\bwapda\b", r"\bsngpl\b",
+    r"\bogdcl\b", r"\bppl\b", r"descon", r"\bnlc\b", r"\bpia\b", r"serena hotel",
+    r"pearl continental", r"marriott", r"avari",
+)
+_BIG_BRAND_RE = re.compile(
+    r"^(?:the\s+)?(?:" + "|".join(_BIG_BRANDS) + r")\b|\b(?:" + "|".join(_BIG_BRANDS) + r")\s+(?:limited|ltd|pvt|group|industries|corporation)\b",
+    re.I,
+)
+
+# Corporate-scale suffixes. A "(Pvt) Ltd" alone means nothing here — most small
+# Pakistani firms register that way — but combined with high review counts it
+# points at a company with its own IT budget.
+_CORPORATE_RE = re.compile(
+    r"\b(?:head office|corporate office|regional office|holdings|conglomerate|"
+    r"multinational|plc)\b", re.I)
+
+# Above this many Google reviews a business is established enough to already
+# have someone handling its web presence. Chosen from the data: local shops and
+# clinics sit in the tens, national chains in the thousands.
+_WELL_SERVED_REVIEWS = 1500
+
+
+def _already_well_served(lead: dict) -> tuple[bool, str]:
+    """Big enough that they already have a team or an agency.
+
+    A healthy site is handled by the audit gate, which drops businesses with
+    nothing wrong. This is the different case: a large company whose site has
+    faults but who will never hire an unknown agency to fix them.
+    """
+    name = str(lead.get("business_name") or "")
+
+    m = _BIG_BRAND_RE.search(name)
+    if m:
+        return True, f"a large national brand ({m.group(0).strip()}) — has its own team"
+
+    if _CORPORATE_RE.search(name):
+        return True, "a corporate head office, not an owner-run business"
+
+    reviews = lead.get("reviews_count")
+    if isinstance(reviews, int) and reviews >= _WELL_SERVED_REVIEWS:
+        return True, f"{reviews:,} Google reviews — established enough to have an agency"
+
+    return False, ""
 
 
 # --- Fit scoring -----------------------------------------------------------
@@ -175,6 +242,24 @@ def score(lead: dict, icp: dict | None = None) -> tuple[int, list[str]]:
         pts += 10; why.append("in a target city")
     elif target_cities:
         pts -= 8; why.append("outside our target cities")
+
+    # Size and standing. A small business that is struggling online is the whole
+    # target market: it has a real problem, no in-house team, and one person who
+    # can say yes. A busy, well-reviewed one already has someone doing this.
+    reviews = lead.get("reviews_count")
+    rating = lead.get("rating")
+    if isinstance(reviews, int):
+        if reviews <= 30:
+            pts += 12; why.append(f"only {reviews} reviews — little online presence to lose")
+        elif reviews <= 200:
+            pts += 6; why.append(f"{reviews} reviews — established but still owner-run")
+        elif reviews >= 800:
+            pts -= 20; why.append(f"{reviews:,} reviews — likely has an agency already")
+    if isinstance(rating, (int, float)) and rating:
+        if rating < 3.5:
+            pts += 8; why.append(f"{rating} rating — reputation needs work, and they know it")
+        elif rating >= 4.7 and isinstance(reviews, int) and reviews >= 300:
+            pts -= 8; why.append("highly rated and busy — less likely to feel a problem")
 
     return max(0, min(100, pts)), why
 

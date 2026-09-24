@@ -133,7 +133,7 @@ def verify_and_store(raw_leads: list[dict], niche: str, country: str, city: str,
     col = _leads()
     verified = 0
     reasons = {"duplicate": 0, "invalid_phone": 0, "no_contact": 0,
-               "competitor": 0, "blocked": 0, "junk": 0}
+               "competitor": 0, "blocked": 0, "junk": 0, "too_big": 0}
     icp = get_icp()
 
     for raw in raw_leads:
@@ -199,6 +199,10 @@ def verify_and_store(raw_leads: list[dict], niche: str, country: str, city: str,
                 # WHY this lead was collected — evidence-based, from the site audit.
                 "collection_reason": raw.get("collection_reason", ""),
                 "opportunity_score": raw.get("opportunity_score", 0),
+                # Size/standing signals from the Maps card — the only measure
+                # we have of whether a business already has help.
+                "rating": raw.get("rating"),
+                "reviews_count": raw.get("reviews_count"),
                 "fit_score": _fit.get("fit_score", 0),
                 "fit_reasons": _fit.get("fit_reasons", []),
                 "site_audit": raw.get("site_audit", {}),

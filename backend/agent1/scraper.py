@@ -149,12 +149,32 @@ async def _extract_website(page) -> str:
     return ""
 
 
+# Maps prints the score and review count together on the result card, e.g.
+# "4.2 (89)" or "3.8(1,204)". Both were being thrown away, yet they are the
+# only size-and-quality signal available without a paid data source: a business
+# with 2,000 reviews has an agency already, one with 11 usually does not.
+_RATING_RE = re.compile(r"\b([1-5][.,]\d)\s*\(\s*([\d,\s]+)\s*\)")
+
+
+def _parse_rating(card_text: str) -> tuple[float | None, int | None]:
+    m = _RATING_RE.search(card_text or "")
+    if not m:
+        return None, None
+    try:
+        rating = float(m.group(1).replace(",", "."))
+        reviews = int(re.sub(r"\D", "", m.group(2)) or 0)
+    except ValueError:
+        return None, None
+    return rating, reviews
+
+
 def _build_lead(name: str, card_text: str, phone: str, website: str) -> dict:
     category = ""
     for line in [l.strip() for l in card_text.split("\n") if l.strip()][1:5]:
         if any(ch.isalpha() for ch in line) and len(line) < 40 and not any(c.isdigit() for c in line[:3]):
             category = line
             break
+    rating, reviews = _parse_rating(card_text)
     return {
         "business_name": name,
         "category": category,
@@ -162,4 +182,6 @@ def _build_lead(name: str, card_text: str, phone: str, website: str) -> dict:
         "website": website,
         "address": "",
         "appears_no_website": not bool(website),
+        "rating": rating,
+        "reviews_count": reviews,
     }
