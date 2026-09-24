@@ -165,6 +165,12 @@ def get_agent_config(agent_id: str) -> dict:
     return {**DEFAULT_CONFIG, **cfg}
 
 
+# Failures worth retrying: the provider is briefly unwell rather than refusing
+# us. An invalid key or a malformed request will fail identically every time,
+# so those fall straight through to the fallback.
+_TRANSIENT_KINDS = {"server", "timeout", "rate_limited"}
+
+
 # ---- the one call every agent uses ----------------------------------------
 async def call_ai(agent_id: str, system: str, messages: list[dict], max_tokens: int = 500, purpose: str = "chat") -> dict:
     """Route to the agent's provider, with fallback. Returns
@@ -182,8 +188,23 @@ async def call_ai(agent_id: str, system: str, messages: list[dict], max_tokens: 
             last = {"ok": False, "error": f"No API key configured for {provider_id} — add one in Settings → AI Providers.", "error_kind": "no_key"}
             _log_usage(agent_id, provider_id, model, {"ok": False, "usage": {}}, purpose, is_fallback)
             continue
-        await _rate_gate(provider_id)
-        res = await provider_call(provider_id, key, base, model, system, messages, max_tokens)
+        # A 5xx or a timeout is the provider having a moment, not a real
+        # refusal — Gemini returns 503 intermittently and the whole request
+        # was failing on the first one. Retry the same model briefly before
+        # moving on; an auth or quota error is permanent, so that falls
+        # through immediately.
+        res = None
+        for attempt in range(3):
+            await _rate_gate(provider_id)
+            res = await provider_call(provider_id, key, base, model, system, messages, max_tokens)
+            if res["ok"] or res.get("error_kind") not in _TRANSIENT_KINDS:
+                break
+            if attempt < 2:
+                wait = 2 ** attempt          # 1s, then 2s
+                log.info("%s/%s returned %s — retrying in %ss",
+                         provider_id, model, res.get("error", "")[:60], wait)
+                await asyncio.sleep(wait)
+
         _log_usage(agent_id, provider_id, model, res, purpose, is_fallback)
         if res["ok"]:
             log.info("AI call for %s served by %s/%s%s", agent_id, provider_id, model, " (fallback)" if is_fallback else "")

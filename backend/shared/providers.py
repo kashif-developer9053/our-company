@@ -131,7 +131,11 @@ def _http_error(r):
     if r.status_code == 429:
         return _norm(False, error="Rate limited by provider.", kind="rate_limited")
     if r.status_code >= 500:
-        return _norm(False, error=f"Provider server error ({r.status_code}).", kind="server")
+        # Say whose fault it is. "Provider server error (503)" read like a bug
+        # in the app, so time was spent looking for one that was not there.
+        return _norm(False, kind="server", error=(
+            f"The AI provider is temporarily down ({r.status_code}) — this is on their side, "
+            f"not yours. Already retried; try again in a minute."))
     detail = ""
     try:
         detail = str(r.json().get("error", {}))[:160]
