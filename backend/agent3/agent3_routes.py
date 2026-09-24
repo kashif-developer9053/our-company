@@ -1054,23 +1054,32 @@ async def edit_draft(draft_id: str, body: EditDraftBody):
 
 # ---- WhatsApp outreach (click-to-send, never automated) --------------------
 WA_SYSTEM = (
-    "You write short WhatsApp messages for an IT company contacting a local business owner in "
-    "Pakistan. WhatsApp is not email: no subject, no signature, no formal paragraphs.\n\n"
-    "WHAT YOU ARE SELLING: not just a website. We build the software this KIND of business runs "
-    "on. Every message must offer BOTH — fixing or building their online presence, AND the "
-    "systems listed in the brief that fit their industry. A message that only says 'you have no "
-    "website' gives the reader nothing to want and is the main reason these get ignored.\n\n"
-    "RULES:\n"
-    "- 4 to 6 short lines, 60 to 100 words. Readable at a glance, but not so thin it says nothing.\n"
-    "- Open with a respectful greeting appropriate for Pakistan.\n"
-    "- Say what their situation costs them, in terms of the people they are trying to reach — "
-    "never the technical detail, never how to fix it.\n"
-    "- Then name TWO OR THREE systems from the brief, in plain words, as things we can build for "
-    "them. Use their industry's own vocabulary.\n"
-    "- End with one easy question inviting a reply.\n"
-    "- No hype, no emoji spam (one at most), no ALL CAPS, no links, no price talk.\n"
-    "- Never use the words ERP, CRM or 'solution' on their own — say what the system DOES.\n"
-    "- Sound like a real person typing, not a broadcast."
+    "You write WhatsApp messages for an IT company contacting a local business owner in Pakistan.\n\n"
+    "LENGTH IS THE MOST IMPORTANT RULE: 35 to 55 words, maximum 4 short lines. A business owner "
+    "reads this on a phone between customers. Anything longer is scrolled past and never "
+    "answered. Every sentence must earn its place — cut any word that is not doing work.\n\n"
+    "THE SHAPE — four beats, one line each:\n"
+    "1. Greeting plus who you are: 'Salam, I'm <name> from <company>.'\n"
+    "2. What you noticed, in plain words: 'people search for <business> and find no website'.\n"
+    "3. What you can do, naming ONE or TWO systems that fit their trade: 'we build sites plus "
+    "attendance and fee systems for schools'.\n"
+    "4. One short question: 'Can I show you?'\n\n"
+    "HARD RULES:\n"
+    "- Always name your company and yourself in the first line. They have never heard of you, and "
+    "an unsigned message from an unknown number reads like spam.\n"
+    "- Never explain the technical fault, only what it costs them.\n"
+    "- No preamble: skip 'hope you are doing well', 'I wanted to reach out', 'I was browsing'.\n"
+    "- No corporate words: never 'solution', 'streamline', 'digital presence', 'optimise', or "
+    "the bare words ERP or CRM. Say what the system DOES in the owner's own language.\n"
+    "- No hype, no ALL CAPS, at most one emoji, no links, no prices.\n"
+    "- Sound like one person typing quickly, not a company broadcasting.\n\n"
+    "GOOD (44 words):\n"
+    "Salam, I'm Kashif from Eldian Core.\n"
+    "Parents searching for your school online can't find a website — they end up calling "
+    "someone else.\n"
+    "We build school sites plus fee, admission and attendance systems.\n"
+    "Want me to show you what it would look like?\n\n"
+    "Match that length and rhythm exactly."
 )
 
 
@@ -1128,21 +1137,31 @@ async def whatsapp_message(body: WaMessageBody):
     # what turns "you have no website" into a message worth replying to.
     systems = niche_services_for(niche, limit=4)
     audience = niche_audience_for(niche)
-    lang = ("Write in Roman Urdu — Urdu written in English letters, the way Pakistanis actually "
-            "type on WhatsApp. Natural and conversational, not formal or translated. Keep "
-            "technical product names in English (website, system, software)."
-            if body.language == "roman_urdu" else "Write in simple, clear English.")
+    # The worked example in WA_SYSTEM is English, and the model kept copying
+    # its language along with its shape, so the Roman Urdu instruction has to
+    # be emphatic and show the register it means.
+    lang = (
+        "LANGUAGE: write in ROMAN URDU — Urdu typed in English letters, the way Pakistanis "
+        "actually message on WhatsApp. NOT English. The worked example below is in English "
+        "only to show the LENGTH and SHAPE; your output must be Roman Urdu.\n"
+        "Keep product words in English (website, system, software, portal).\n"
+        "Roman Urdu register to match: 'Salam, main Kashif hoon Eldian Core se. Log aap ko "
+        "online search karte hain lekin website nahi milti. Hum website ke sath fees aur "
+        "attendance ka system bhi banate hain. Dikhaun aap ko?'"
+        if body.language == "roman_urdu" else
+        "LANGUAGE: write in simple, clear English."
+    )
     prompt = (
         f"{lang}\n\n"
-        f"BUSINESS: {lead.get('business_name')} — {niche} in {lead.get('city','')}\n"
-        f"WHO THEY WANT TO REACH: {audience}\n"
-        f"YOUR COMPANY: {profile.get('company_name','')}\n"
-        f"YOUR NAME: {profile.get('sender_name','')}\n\n"
-        f"WHAT YOU FOUND (say the consequence, never the technical detail):\n{angle}\n\n"
-        f"SYSTEMS WE CAN BUILD FOR THIS INDUSTRY — pick the two or three most useful and "
-        f"mention them in plain words:\n- " + "\n- ".join(systems) + "\n\n"
-        f"Offer to build or improve their online presence AND these systems. "
-        f"Write the WhatsApp message only — no preamble, no quotes around it."
+        f"INTRODUCE YOURSELF AS: {profile.get('sender_name','')} from "
+        f"{profile.get('company_name','')} — this goes in the FIRST line, every time.\n\n"
+        f"WHO YOU ARE WRITING TO: {lead.get('business_name')} — {niche} in {lead.get('city','')}\n"
+        f"WHO THEY WANT TO REACH: {audience}\n\n"
+        f"WHAT YOU FOUND (say the consequence in ONE plain clause, never the technical "
+        f"detail):\n{angle}\n\n"
+        f"MENTION ONE OR TWO OF THESE, in the owner's own words:\n- " + "\n- ".join(systems) + "\n\n"
+        f"Write the WhatsApp message only — no preamble, no quotes around it. "
+        f"Remember: 35-55 words, 4 short lines, your name and company in line one."
     )
     res = await agent_task("agent3", prompt, max_tokens=400, purpose="whatsapp",
                            draft_instructions=WA_SYSTEM)
