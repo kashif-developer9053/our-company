@@ -79,14 +79,18 @@ def wa_link(number: str, message: str) -> str:
     """Build the click-to-send link. Opens WhatsApp with the text pre-typed —
     the CEO still has to press send.
 
-    web.whatsapp.com/send rather than wa.me: the short link is a redirector
-    that shows an interstitial and reloads WhatsApp Web on every click, which
-    is slow when working through a list of numbers one after another.
+    This is the URL wa.me itself resolves to, used directly to skip the
+    redirect hop. `web.whatsapp.com/send` was tried first and frequently
+    landed on an empty chat when steered into an already-open tab;
+    api.whatsapp.com/send is the form WhatsApp's own short links produce, and
+    app_absent=0 tells it to use the session already running rather than
+    prompting to open the desktop app.
     """
     if not number:
         return ""
-    return (f"https://web.whatsapp.com/send?phone={number}"
-            f"&text={quote(message or '', safe='')}")
+    return (f"https://api.whatsapp.com/send/?phone={number}"
+            f"&text={quote(message or '', safe='')}"
+            f"&type=phone_number&app_absent=0")
 
 
 def wa_state(lead: dict) -> dict:

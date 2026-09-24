@@ -1067,19 +1067,24 @@ WA_SYSTEM = (
     "HARD RULES:\n"
     "- Always name your company and yourself in the first line. They have never heard of you, and "
     "an unsigned message from an unknown number reads like spam.\n"
+    "- End with our website on its own last line, exactly as given in the brief and nothing else "
+    "on that line. It is the only proof they have that we are a real company, and it lets them "
+    "check us before replying.\n"
     "- Never explain the technical fault, only what it costs them.\n"
     "- No preamble: skip 'hope you are doing well', 'I wanted to reach out', 'I was browsing'.\n"
     "- No corporate words: never 'solution', 'streamline', 'digital presence', 'optimise', or "
     "the bare words ERP or CRM. Say what the system DOES in the owner's own language.\n"
-    "- No hype, no ALL CAPS, at most one emoji, no links, no prices.\n"
-    "- Sound like one person typing quickly, not a company broadcasting.\n\n"
-    "GOOD (44 words):\n"
+    "- Polite and businesslike, but not stiff. No hype, no ALL CAPS, at most one emoji, no "
+    "prices, no link other than our own website.\n"
+    "- Sound like one professional writing to another, not a company broadcasting.\n\n"
+    "GOOD (46 words):\n"
     "Salam, I'm Kashif from Eldian Core.\n"
     "Parents searching for your school online can't find a website — they end up calling "
     "someone else.\n"
     "We build school sites plus fee, admission and attendance systems.\n"
-    "Want me to show you what it would look like?\n\n"
-    "Match that length and rhythm exactly."
+    "Would you like to see a sample?\n"
+    "www.eldiancore.com\n\n"
+    "Match that length, rhythm and ending exactly."
 )
 
 
@@ -1160,8 +1165,10 @@ async def whatsapp_message(body: WaMessageBody):
         f"WHAT YOU FOUND (say the consequence in ONE plain clause, never the technical "
         f"detail):\n{angle}\n\n"
         f"MENTION ONE OR TWO OF THESE, in the owner's own words:\n- " + "\n- ".join(systems) + "\n\n"
+        f"END WITH THIS WEBSITE on its own final line, exactly as written and nothing "
+        f"else on that line: {profile.get('website','')}\n\n"
         f"Write the WhatsApp message only — no preamble, no quotes around it. "
-        f"Remember: 35-55 words, 4 short lines, your name and company in line one."
+        f"Remember: 35-55 words, your name and company in line one, the website on the last."
     )
     res = await agent_task("agent3", prompt, max_tokens=400, purpose="whatsapp",
                            draft_instructions=WA_SYSTEM)
