@@ -36,6 +36,18 @@ PROVIDERS: dict[str, dict] = {
         "models": ["gemini-2.5-pro", "gemini-2.5-flash"],
         "needs_base_url": False,
     },
+    # NVIDIA NIM speaks the OpenAI protocol. Added because a Gemini outage
+    # previously had no escape route: agent3's primary AND fallback were both
+    # Google, so when their models returned 503 en masse nothing could be
+    # written at all. A second vendor is the only real protection against that.
+    "nvidia": {
+        "display_name": "NVIDIA NIM", "kind": "openai",
+        "base_url": "https://integrate.api.nvidia.com/v1",
+        # Verified live against the account: most catalogue entries answer 404
+        # or 410 (retired endpoints), so only the one that responded is listed.
+        "models": ["mistralai/mistral-nemotron"],
+        "needs_base_url": False,
+    },
     "agent_router": {
         "display_name": "Agent Router (OpenAI-compatible)", "kind": "openai",
         "base_url": "", "models": [], "needs_base_url": True,
