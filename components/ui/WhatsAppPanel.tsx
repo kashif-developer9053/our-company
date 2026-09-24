@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import * as api from "@/lib/api";
 import type { WhatsAppLead } from "@/lib/api";
 
@@ -38,7 +38,12 @@ export default function WhatsAppPanel() {
   const [rowLang, setRowLang] = useState<Record<string, "english" | "roman_urdu">>({});
   // Desktop app vs browser tab. Remembered, because whichever one works on
   // this machine is the one that works every time.
-  const [useDesktop, setUseDesktop] = useState(true);
+  // Held across renders so every later click can steer the SAME tab rather
+  // than asking the browser for a new one.
+  const waTab = useRef<Window | null>(null);
+  const [waOpen, setWaOpen] = useState(false);
+  // Desktop app is off by default: most people here work in WhatsApp Web.
+  const [useDesktop, setUseDesktop] = useState(false);
   useEffect(() => {
     try {
       const v = localStorage.getItem("wa_use_desktop");
@@ -62,6 +67,14 @@ export default function WhatsAppPanel() {
     } catch { /* backend down */ }
   }, []);
   useEffect(() => { load(filter); }, [filter, load]);
+
+  // The indicator must not claim a link that no longer exists.
+  useEffect(() => {
+    const t = setInterval(() => {
+      if (waOpen && (!waTab.current || waTab.current.closed)) setWaOpen(false);
+    }, 3000);
+    return () => clearInterval(t);
+  }, [waOpen]);
 
   // Sent today — keeps the CEO under a volume that won't get the number banned.
   const sentToday = leads.filter((l) => {
@@ -91,6 +104,21 @@ export default function WhatsAppPanel() {
   // never stacks tabs. A browser CANNOT reuse a WhatsApp Web tab the user
   // opened themselves — same-origin rules mean our page has no handle on it —
   // so the desktop app is the only route that genuinely behaves as expected.
+  // A browser can only steer a tab it opened. Clicking this once hands the
+  // app a handle to WhatsApp Web; from then on every lead switches that same
+  // tab instead of spawning a new one.
+  const openWaTab = () => {
+    const win = window.open("https://web.whatsapp.com/", "eldiancore_whatsapp");
+    if (!win) {
+      setMsg("⚠ Your browser blocked the tab — allow popups for this site, then try again.");
+      return;
+    }
+    waTab.current = win;
+    setWaOpen(true);
+    win.focus();
+    setMsg("WhatsApp Web linked. Leave that tab open and every message will reuse it.");
+  };
+
   const desktopLink = (l: WhatsAppLead) =>
     `whatsapp://send?phone=${l.number}&text=${encodeURIComponent(draft)}`;
 
@@ -103,15 +131,35 @@ export default function WhatsAppPanel() {
       return;
     }
     const url = draft ? linkFor(l) : link;
-    // A named target at least reuses OUR tab across leads, even though it
-    // cannot adopt a WhatsApp tab opened outside the app.
+
+    // A page can only reuse a tab IT opened: window.open(url, name) looks up
+    // the name among windows this origin created, so a WhatsApp tab opened by
+    // hand is unreachable no matter what. The workable version is to hold our
+    // own reference — open it once, then keep steering that same tab.
+    //
+    // waTab survives re-renders; the named target covers the case where the
+    // reference is lost (a page refresh) but the tab is still open.
+    const existing = waTab.current;
+    if (existing && !existing.closed) {
+      try {
+        existing.location.href = url;   // same tab, straight to the next chat
+        existing.focus();
+        setMsg("Switched the open WhatsApp tab to this chat. Press send there.");
+        return;
+      } catch {
+        // Cross-origin navigation was refused; fall through and re-open.
+      }
+    }
+
     const win = window.open(url, "eldiancore_whatsapp");
     if (!win) {
       setMsg("⚠ Your browser blocked the WhatsApp tab — allow popups for this site.");
       return;
     }
+    waTab.current = win;
+    setWaOpen(true);
     win.focus();
-    setMsg("WhatsApp opened. Press send there, then mark it below.");
+    setMsg("WhatsApp opened here. Keep this tab open — the next lead reuses it.");
   };
 
   const setStatus = async (l: WhatsAppLead, status: string) => {
@@ -157,6 +205,10 @@ export default function WhatsAppPanel() {
           </button>
         ))}
         <span style={{ marginLeft: "auto", display: "flex", gap: 6, alignItems: "center" }}>
+          <button className="btn-mini" type="button" onClick={openWaTab}
+            title="Open WhatsApp Web once from here — every later click reuses this tab">
+            {waOpen ? "✓ WhatsApp tab linked" : "Link WhatsApp tab"}
+          </button>
           <label className="wa-modetoggle" title="The desktop app switches chats in one window; a browser opens tabs">
             <input type="checkbox" checked={useDesktop}
               onChange={(e) => toggleDesktop(e.target.checked)} />
