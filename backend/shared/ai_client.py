@@ -170,6 +170,17 @@ def get_agent_config(agent_id: str) -> dict:
 # so those fall straight through to the fallback.
 _TRANSIENT_KINDS = {"server", "timeout", "rate_limited"}
 
+# Tried only when the agent's own primary and fallback have both failed.
+# Ordered by how reliably each answered when tested against a live account:
+# sibling Gemini models first (an outage usually hits one model, not all), then
+# a different vendor entirely for the case where Google is broadly unwell.
+_EMERGENCY_MODELS: tuple[tuple[str, str], ...] = (
+    ("gemini", "gemini-flash-lite-latest"),
+    ("gemini", "gemini-3.5-flash-lite"),
+    ("gemini", "gemini-3-flash-preview"),
+    ("nvidia", "mistralai/mistral-nemotron"),
+)
+
 
 # ---- the one call every agent uses ----------------------------------------
 async def call_ai(agent_id: str, system: str, messages: list[dict], max_tokens: int = 500, purpose: str = "chat") -> dict:
@@ -179,6 +190,17 @@ async def call_ai(agent_id: str, system: str, messages: list[dict], max_tokens: 
     attempts = [(cfg["provider_id"], cfg["model"], False)]
     if cfg.get("fallback_provider_id") and cfg.get("fallback_model"):
         attempts.append((cfg["fallback_provider_id"], cfg["fallback_model"], True))
+
+    # Last resort. Gemini's 503s roll across individual models rather than
+    # taking the whole service down — one model answers while another is
+    # overloaded, and the pair flips minutes later. With only a primary and a
+    # fallback, both happening to be unlucky meant nothing could be written at
+    # all. These are tried only after the configured pair has already failed,
+    # so a healthy setup never reaches them and nothing changes for it.
+    tried = {(p, m) for p, m, _ in attempts}
+    for provider_id, model in _EMERGENCY_MODELS:
+        if (provider_id, model) not in tried and get_provider_key(provider_id):
+            attempts.append((provider_id, model, True))
 
     last = {"ok": False, "error": "No provider configured", "error_kind": "no_provider"}
     for provider_id, model, is_fallback in attempts:
