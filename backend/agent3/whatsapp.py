@@ -77,10 +77,16 @@ def looks_mobile(number: str, dial: str = _DEFAULT_DIAL) -> bool:
 
 def wa_link(number: str, message: str) -> str:
     """Build the click-to-send link. Opens WhatsApp with the text pre-typed —
-    the CEO still has to press send."""
+    the CEO still has to press send.
+
+    web.whatsapp.com/send rather than wa.me: the short link is a redirector
+    that shows an interstitial and reloads WhatsApp Web on every click, which
+    is slow when working through a list of numbers one after another.
+    """
     if not number:
         return ""
-    return f"https://wa.me/{number}?text={quote(message or '', safe='')}"
+    return (f"https://web.whatsapp.com/send?phone={number}"
+            f"&text={quote(message or '', safe='')}")
 
 
 def wa_state(lead: dict) -> dict:

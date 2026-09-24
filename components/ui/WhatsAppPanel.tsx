@@ -69,13 +69,29 @@ export default function WhatsAppPanel() {
   };
 
   // Re-encode the link whenever the CEO edits the text before sending.
+  // web.whatsapp.com/send goes straight to the chat; wa.me is a redirector
+  // that bounces through an interstitial and reloads WhatsApp Web each time.
   const linkFor = (l: WhatsAppLead) =>
-    `https://wa.me/${l.number}?text=${encodeURIComponent(draft)}`;
+    `https://web.whatsapp.com/send?phone=${l.number}&text=${encodeURIComponent(draft)}`;
 
   const openWhatsApp = async (l: WhatsAppLead) => {
-    window.open(draft ? linkFor(l) : link, "_blank", "noopener");
+    const url = draft ? linkFor(l) : link;
+    // A NAMED target reuses the same tab instead of stacking a new one per
+    // lead. Working through thirty numbers previously left thirty tabs open,
+    // each reloading WhatsApp Web from scratch.
+    //
+    // "noopener" is deliberately omitted: it forces a fresh browsing context,
+    // which defeats the reuse. The target is our own fixed WhatsApp URL, not
+    // anything user-supplied, so there is nothing for a third party to abuse.
+    const win = window.open(url, "eldiancore_whatsapp");
+    // Popup blocked, or the tab was closed and could not be reclaimed.
+    if (!win) {
+      setMsg("⚠ Your browser blocked the WhatsApp tab — allow popups for this site.");
+      return;
+    }
+    win.focus();
     // Opening the chat is the moment worth recording — the CEO confirms below.
-    setMsg("WhatsApp opened. Press send there, then mark it below.");
+    setMsg("WhatsApp opened in the same tab. Press send there, then mark it below.");
   };
 
   const setStatus = async (l: WhatsAppLead, status: string) => {
