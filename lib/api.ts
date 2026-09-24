@@ -461,7 +461,23 @@ export const harvestLeads = (body: {
     rejected?: { no_contact: number; good_site: number; guessed_email_only: number };
     already_held?: number; niche_total?: number;
     message?: string; next_options?: NextOption[]; error?: string;
+    run_id?: string; status?: string;
   }>("/agent1/harvest-leads", { method: "POST", body: JSON.stringify(body) });
+
+// A hunt runs in the background: the POST returns a run_id immediately and
+// the UI polls hunt-status. Nginx closes a proxied request after 600s, and a
+// hunt can legitimately run an hour — that mismatch was the 504.
+export interface HuntStatus {
+  ok: boolean; status?: "running" | "done" | "error";
+  message?: string; found?: number; target?: number; added?: number;
+  rounds?: number; examined?: number; elapsed_seconds?: number;
+  complete?: boolean; batch_id?: string; already_held?: number;
+  niche_total?: number; next_options?: NextOption[];
+  rejected?: { no_contact: number; good_site: number; guessed_email_only: number };
+  error?: string;
+}
+export const getHuntStatus = (runId: string) =>
+  req<HuntStatus>(`/agent1/hunt-status/${encodeURIComponent(runId)}`);
 
 export const getNicheProgress = (niche: string, city = "", country = "") =>
   req<{ ok: boolean; niche: string; collected: number; pending_approval: number;

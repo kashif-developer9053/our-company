@@ -6,6 +6,7 @@ NOT trigger any scraping or lead generation — that is Phase 4.
 
 from __future__ import annotations
 
+import asyncio
 import re
 import uuid
 from datetime import datetime, timezone
@@ -85,6 +86,23 @@ def _col():
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+_now_iso = _now
+
+# Live hunt state, in memory. A hunt is a single long job whose progress only
+# matters while it runs, so it does not need persisting — a restart cancels the
+# hunt anyway, and any leads it already stored are safe in the database.
+_HUNT_RUNS: dict[str, dict] = {}
+
+
+def _hunt_runs() -> dict[str, dict]:
+    # Keep the most recent handful so a page refresh can still find the run.
+    if len(_HUNT_RUNS) > 20:
+        for key in sorted(_HUNT_RUNS,
+                          key=lambda k: _HUNT_RUNS[k].get("started_at", ""))[:10]:
+            _HUNT_RUNS.pop(key, None)
+    return _HUNT_RUNS
 
 
 class ChatBody(BaseModel):
@@ -257,6 +275,20 @@ class HarvestBody(BaseModel):
     continue_niche: bool = False
 
 
+@router.get("/hunt-status/{run_id}")
+@safe_endpoint("agent1")
+async def hunt_status(run_id: str):
+    """Progress of a background lead hunt.
+
+    The hunt no longer blocks the request, so this is how the UI follows it.
+    """
+    run = _hunt_runs().get(run_id)
+    if not run:
+        return {"ok": False, "error": "That hunt is not running — it may have "
+                                      "finished before a restart, or already been cleared."}
+    return {"ok": True, **run}
+
+
 @router.get("/niche-performance")
 @safe_endpoint("agent1")
 async def niche_performance():
@@ -330,22 +362,63 @@ async def harvest_leads_route(body: HarvestBody):
             elif d.get("business_name"):
                 exclude.add(d["business_name"].strip().lower())
 
+    # A hunt can legitimately run up to an hour, but nginx closes an idle
+    # proxied connection after 600s — which is exactly the 504 the CEO was
+    # seeing. Worse, the work carried on server-side afterwards, so the hunt
+    # succeeded invisibly behind an error page. Run it as a background job and
+    # return a run id immediately; the UI polls for progress.
+    run_id = f"hunt_{uuid.uuid4().hex[:8]}"
+    _hunt_runs()[run_id] = {
+        "id": run_id, "status": "running", "niche": body.niche, "where": where,
+        "target": target, "already_held": already, "found": 0,
+        "message": f"Hunting {target} qualified leads: {body.niche} in {where}",
+        "started_at": _now_iso(),
+    }
+    asyncio.create_task(_run_hunt(run_id, body, target, already, where, exclude))
+    return {"ok": True, "run_id": run_id, "status": "running",
+            "message": (f"Hunting {target} qualified leads for '{body.niche}' in {where}. "
+                        f"This runs in the background and can take several minutes — "
+                        f"progress appears below."),
+            "already_held": already}
+
+
+async def _run_hunt(run_id: str, body: "HarvestBody", target: int, already: int,
+                    where: str, exclude: set) -> None:
+    """The actual hunt, off the request path. Never raises (isolated)."""
+    import uuid as _uuid
+
+    from crm.leads_routes import add_leads
+    from shared import notifications
+
+    from .lead_harvester import harvest_leads
+
+    runs = _hunt_runs()
+
+    def progress(msg: str) -> None:
+        _set_status("working", msg[:120])
+        if run_id in runs:
+            runs[run_id]["message"] = msg[:200]
+
     _set_status("working", f"Hunting {target} qualified leads: {body.niche} in {where}")
     try:
         result = await harvest_leads(
             body.niche, body.city, body.country, target=target, exclude_keys=exclude,
-            progress=lambda m: _set_status("working", m[:120]),
+            progress=progress,
         )
     except Exception as exc:  # noqa: BLE001
         _set_status("error", f"Lead hunt failed: {exc}")
         log.error("Harvest failed (isolated): %s", exc)
-        return {"ok": False, "error": f"Lead hunt failed: {exc}"}
+        runs[run_id] = {**runs.get(run_id, {}), "status": "error",
+                        "message": f"Lead hunt failed: {exc}", "finished_at": _now_iso()}
+        return
 
     leads = result["leads"]
     if not leads:
         _set_status("idle")
-        return {"ok": True, "added": 0, "batch_id": "", **result,
-                "next_options": _next_options(body.niche, result)}
+        runs[run_id] = {**runs.get(run_id, {}), "status": "done", "added": 0,
+                        "batch_id": "", **result, "finished_at": _now_iso(),
+                        "next_options": _next_options(body.niche, result)}
+        return
 
     # Stage as a pending batch awaiting CEO approval.
     batch_id = f"harvest_{_uuid.uuid4().hex[:8]}"
@@ -363,10 +436,12 @@ async def harvest_leads_route(body: HarvestBody):
         agent_id="agent1", action="leads_pending", ref_id=batch_id,
     )
     _set_status("idle")
-    return {"ok": True, "batch_id": batch_id, **stored, **result,
-            "already_held": already,
-            "niche_total": already + len(leads),
-            "next_options": _next_options(body.niche, result)}
+    runs[run_id] = {**runs.get(run_id, {}), "status": "done",
+                    "batch_id": batch_id, **stored, **result,
+                    "already_held": already,
+                    "niche_total": already + len(leads),
+                    "finished_at": _now_iso(),
+                    "next_options": _next_options(body.niche, result)}
 
 
 @router.get("/niche-progress")

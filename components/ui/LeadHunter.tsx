@@ -61,6 +61,14 @@ export default function LeadHunter({ onDone }: { onDone?: () => void }) {
       });
       if (!r.ok) { setErr(r.error || "Hunt failed."); return; }
       setLastNiche(n);
+
+      // The hunt now runs in the background: nginx closes a proxied request
+      // after 600s and a hunt can run far longer, which was the 504. Poll
+      // until it finishes instead of holding the connection open.
+      if (r.run_id) {
+        await pollHunt(r.run_id, n);
+        return;
+      }
       setResult({
         found: r.found ?? 0, target: r.target ?? target, complete: !!r.complete,
         rounds: r.rounds ?? 0, examined: r.examined ?? 0, elapsed_seconds: r.elapsed_seconds ?? 0,
@@ -72,6 +80,31 @@ export default function LeadHunter({ onDone }: { onDone?: () => void }) {
       onDone?.();
     } catch (e) { setErr((e as Error).message); }
     finally { setBusy(false); }
+  };
+
+  const pollHunt = async (runId: string, n: string) => {
+    for (;;) {
+      await new Promise((r) => setTimeout(r, 4000));
+      let st;
+      try { st = await api.getHuntStatus(runId); }
+      catch { continue; }                     // a blip should not kill the hunt view
+      if (!st.ok) { setErr(st.error || "Lost track of that hunt."); return; }
+      if (st.message) setLive(st.message);
+      if (st.status === "running") continue;
+      if (st.status === "error") { setErr(st.error || st.message || "Hunt failed."); return; }
+
+      setResult({
+        found: st.found ?? 0, target: st.target ?? target, complete: !!st.complete,
+        rounds: st.rounds ?? 0, examined: st.examined ?? 0,
+        elapsed_seconds: st.elapsed_seconds ?? 0, added: st.added ?? 0,
+        message: st.message ?? "", next_options: st.next_options ?? [],
+        rejected: st.rejected ?? { no_contact: 0, good_site: 0, guessed_email_only: 0 },
+        alreadyHeld: st.already_held ?? 0,
+        nicheTotal: st.niche_total ?? (st.added ?? 0),
+      });
+      onDone?.();
+      return;
+    }
   };
 
   const choose = (action: string) => {
