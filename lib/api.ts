@@ -39,6 +39,25 @@ export const getToken = () =>
 export const setToken = (t: string) => localStorage.setItem(TOKEN_KEY, t);
 export const clearToken = () => localStorage.removeItem(TOKEN_KEY);
 
+// Ask the backend whether this token still works, without going through req()
+// (which would recurse on its own 401 handling). Used to tell a real expiry
+// from a momentary blip before throwing the session away.
+async function verifyTokenAlive(): Promise<boolean> {
+  const token = getToken();
+  if (!token) return false;
+  try {
+    const res = await fetch(`${API_BASE}/auth/me`, {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: "no-store",
+    });
+    return res.ok;
+  } catch {
+    // Network down: assume the session is fine rather than logging the user
+    // out because their wifi dropped for a second.
+    return true;
+  }
+}
+
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const token = getToken();
   const res = await fetch(`${API_BASE}${path}`, {
@@ -54,7 +73,14 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
   // expired session — surface the real message and don't trigger a logout.
   const isAuthAttempt = path.startsWith("/auth/login") || path.startsWith("/auth/setup");
   if (res.status === 401 && !isAuthAttempt) {
-    // Session missing/expired — drop it and tell the app to show login.
+    // Do NOT log out on the first 401. A backend restart, a deploy, or a
+    // request that raced one all answer 401 briefly, and with several panels
+    // polling every few seconds a single blip was enough to wipe the session
+    // mid-task. Confirm the token is genuinely dead before dropping it.
+    const stillValid = await verifyTokenAlive();
+    if (stillValid) {
+      throw new Error("That request was rejected — please try again.");
+    }
     clearToken();
     if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent("auth:unauthorized"));
     throw new Error("Not authenticated");

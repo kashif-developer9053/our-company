@@ -19,7 +19,13 @@ from shared.logger import get_logger
 log = get_logger("auth")
 
 _ALGO = "HS256"
-_EXPIRY_HOURS = 4
+# A working day of outreach — reviewing drafts, watching a hunt, reading
+# replies — runs well past four hours, and being thrown back to the login
+# screen mid-review loses whatever was on screen. This is a single-operator
+# internal tool behind a login, not a bank, so the practical risk of a longer
+# session is small next to the cost of losing work. Logout still revokes the
+# token immediately via the revoked_tokens list.
+_EXPIRY_HOURS = int(os.environ.get("SESSION_HOURS", "168"))  # 7 days
 
 
 def _secret() -> str:
