@@ -36,6 +36,19 @@ export default function WhatsAppPanel() {
   // comfortably with those who reply far better in Roman Urdu, so one global
   // setting was the wrong shape.
   const [rowLang, setRowLang] = useState<Record<string, "english" | "roman_urdu">>({});
+  // Desktop app vs browser tab. Remembered, because whichever one works on
+  // this machine is the one that works every time.
+  const [useDesktop, setUseDesktop] = useState(true);
+  useEffect(() => {
+    try {
+      const v = localStorage.getItem("wa_use_desktop");
+      if (v !== null) setUseDesktop(v === "1");
+    } catch { /* private mode — fall back to the default */ }
+  }, []);
+  const toggleDesktop = (on: boolean) => {
+    setUseDesktop(on);
+    try { localStorage.setItem("wa_use_desktop", on ? "1" : "0"); } catch { /* ignore */ }
+  };
   const [openId, setOpenId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [link, setLink] = useState("");
@@ -74,24 +87,31 @@ export default function WhatsAppPanel() {
   const linkFor = (l: WhatsAppLead) =>
     `https://web.whatsapp.com/send?phone=${l.number}&text=${encodeURIComponent(draft)}`;
 
+  // The desktop app is a single window that switches chats in place, so it
+  // never stacks tabs. A browser CANNOT reuse a WhatsApp Web tab the user
+  // opened themselves — same-origin rules mean our page has no handle on it —
+  // so the desktop app is the only route that genuinely behaves as expected.
+  const desktopLink = (l: WhatsAppLead) =>
+    `whatsapp://send?phone=${l.number}&text=${encodeURIComponent(draft)}`;
+
   const openWhatsApp = async (l: WhatsAppLead) => {
+    if (useDesktop) {
+      // A custom-scheme link cannot report success, so nothing is checked
+      // here: the OS either hands it to WhatsApp or silently ignores it.
+      window.location.href = desktopLink(l);
+      setMsg("Opening in the WhatsApp app. Press send there, then mark it below.");
+      return;
+    }
     const url = draft ? linkFor(l) : link;
-    // A NAMED target reuses the same tab instead of stacking a new one per
-    // lead. Working through thirty numbers previously left thirty tabs open,
-    // each reloading WhatsApp Web from scratch.
-    //
-    // "noopener" is deliberately omitted: it forces a fresh browsing context,
-    // which defeats the reuse. The target is our own fixed WhatsApp URL, not
-    // anything user-supplied, so there is nothing for a third party to abuse.
+    // A named target at least reuses OUR tab across leads, even though it
+    // cannot adopt a WhatsApp tab opened outside the app.
     const win = window.open(url, "eldiancore_whatsapp");
-    // Popup blocked, or the tab was closed and could not be reclaimed.
     if (!win) {
       setMsg("⚠ Your browser blocked the WhatsApp tab — allow popups for this site.");
       return;
     }
     win.focus();
-    // Opening the chat is the moment worth recording — the CEO confirms below.
-    setMsg("WhatsApp opened in the same tab. Press send there, then mark it below.");
+    setMsg("WhatsApp opened. Press send there, then mark it below.");
   };
 
   const setStatus = async (l: WhatsAppLead, status: string) => {
@@ -137,6 +157,11 @@ export default function WhatsAppPanel() {
           </button>
         ))}
         <span style={{ marginLeft: "auto", display: "flex", gap: 6, alignItems: "center" }}>
+          <label className="wa-modetoggle" title="The desktop app switches chats in one window; a browser opens tabs">
+            <input type="checkbox" checked={useDesktop}
+              onChange={(e) => toggleDesktop(e.target.checked)} />
+            <span>Use WhatsApp app</span>
+          </label>
           <span className="muted small">Default language</span>
           <select className="af-input" style={{ width: 130 }} value={lang}
             onChange={(e) => setLang(e.target.value as "english" | "roman_urdu")}>
@@ -172,7 +197,9 @@ export default function WhatsAppPanel() {
                           placeholder={busy === l.id ? "Writing…" : "Message will appear here"} />
                         <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                           <button className="btn-mini primary" disabled={!draft}
-                            onClick={() => openWhatsApp(l)}>Open WhatsApp →</button>
+                            onClick={() => openWhatsApp(l)}>
+                            {useDesktop ? "Open in WhatsApp app →" : "Open WhatsApp Web →"}
+                          </button>
                           <button className="btn-mini" disabled={busy === l.id}
                             onClick={() => prepare(l)}>Rewrite</button>
                           <button className="btn-mini" onClick={() => setStatus(l, "message_sent")}>
