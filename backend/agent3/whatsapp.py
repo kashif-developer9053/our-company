@@ -60,19 +60,67 @@ def normalise_number(raw: str, default_dial: str = _DEFAULT_DIAL) -> str:
     return digits
 
 
-def looks_mobile(number: str, dial: str = _DEFAULT_DIAL) -> bool:
-    """Heuristic: is this a mobile (WhatsApp-capable) rather than a landline?
+# Landline prefixes by country code. A landline can never have WhatsApp, so a
+# lead whose ONLY contact is one is unreachable on this channel.
+#
+# Previously only Pakistan was checked and everything else returned True, so
+# Saudi landlines like +966 13 361 6665 were being queued as WhatsApp leads —
+# 13 is the Eastern Province area code and will never answer on WhatsApp.
+_LANDLINE_PREFIXES: dict[str, tuple[str, ...]] = {
+    "92":  ("21", "22", "41", "42", "44", "48", "51", "53", "55", "61", "62",
+            "64", "68", "71", "74", "81", "86", "91", "92", "99"),   # PK cities
+    "966": ("11", "12", "13", "14", "16", "17"),                     # SA regions
+    "971": ("2", "3", "4", "6", "7", "9"),                           # UAE emirates
+    "44":  ("1", "2"),                                               # UK geographic
+    "353": ("1", "21", "22", "23", "24", "25", "26", "27", "28", "29",
+            "4", "5", "6", "9"),                                     # IE geographic
+    "1":   (),                                                       # NANP: not separable
+    "91":  ("11", "22", "33", "44", "20", "40", "79", "80"),         # IN metros
+}
 
-    We cannot truly verify a number is on WhatsApp without contacting Meta, which
-    is exactly what we avoid. For Pakistan, mobiles are 92 3xx xxxxxxx — landlines
-    start 92 21/42/51 etc. Outside PK we accept anything plausible.
+# Mobile prefixes, checked first — a positive match is stronger evidence than
+# the absence of a landline prefix.
+_MOBILE_PREFIXES: dict[str, tuple[str, ...]] = {
+    "92":  ("3",),          # 92 3xx xxxxxxx
+    "966": ("5",),          # 966 5x xxx xxxx
+    "971": ("5",),
+    "44":  ("7",),
+    "353": ("8",),
+    "91":  ("6", "7", "8", "9"),
+}
+
+
+def looks_mobile(number: str, dial: str = _DEFAULT_DIAL) -> bool:
+    """Is this plausibly a mobile, and therefore WhatsApp-capable?
+
+    A heuristic, not proof: only Meta can say whether a number has a WhatsApp
+    account. This rules out numbers that certainly CANNOT — landlines — which
+    is most of the waste. Unknown country codes are accepted rather than
+    dropped, since a false negative loses a real lead.
     """
     if not number:
         return False
-    if number.startswith(dial):
-        rest = number[len(dial):]
-        return rest.startswith("3") and len(rest) == 10
-    return True
+    digits = "".join(ch for ch in number if ch.isdigit())
+    if len(digits) < 8:
+        return False
+
+    # Longest country code first: 966 must beat 9, 353 must beat 3.
+    for cc in sorted(_LANDLINE_PREFIXES, key=len, reverse=True):
+        if not digits.startswith(cc):
+            continue
+        rest = digits[len(cc):]
+        if not rest:
+            return False
+        mobiles = _MOBILE_PREFIXES.get(cc, ())
+        if mobiles and rest.startswith(mobiles):
+            return True
+        if rest.startswith(_LANDLINE_PREFIXES[cc]):
+            return False
+        # A country we know but a prefix we do not recognise: if we know its
+        # mobile range and this is not in it, treat it as a landline.
+        return not mobiles
+
+    return True    # unknown country code — keep it rather than lose a lead
 
 
 def wa_link(number: str, message: str) -> str:
@@ -132,6 +180,9 @@ def serialize(lead: dict) -> dict:
         # The single headline problem, so the list can be filtered and scanned
         # without loading every lead's full audit.
         "issue": _headline_issue(lead),
+        # yes / no / unknown / "" when never checked. "no" for a landline is
+        # decided locally and costs nothing.
+        "has_whatsapp": (lead.get("wa_verified") or {}).get("verdict", ""),
         "created_at": lead.get("created_at", ""),
     }
 

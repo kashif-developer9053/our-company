@@ -18,6 +18,7 @@ from urllib.parse import urlparse
 import httpx
 
 from agent2.icp import qualify
+from agent3.whatsapp import looks_mobile, normalise_number
 from shared.database import get_db
 from shared.logger import get_logger
 from shared.settings_store import get_icp
@@ -133,7 +134,8 @@ def verify_and_store(raw_leads: list[dict], niche: str, country: str, city: str,
     col = _leads()
     verified = 0
     reasons = {"duplicate": 0, "invalid_phone": 0, "no_contact": 0,
-               "competitor": 0, "blocked": 0, "junk": 0, "too_big": 0}
+               "competitor": 0, "blocked": 0, "junk": 0, "too_big": 0,
+               "landline_no_email": 0}
     icp = get_icp()
 
     for raw in raw_leads:
@@ -174,6 +176,16 @@ def verify_and_store(raw_leads: list[dict], niche: str, country: str, city: str,
             if not phone and email_conf == "none":
                 _store_rejected(raw, niche, country, city, "no_contact")
                 reasons["no_contact"] += 1
+                continue
+
+            # 7) Landline with no email is unreachable: WhatsApp is the only
+            #    channel for a phone-only lead, and a landline never has it.
+            #    With an email the number does not matter — we reach them there
+            #    and the landline is just extra context.
+            if email_conf == "none" and phone and not looks_mobile(normalise_number(phone)):
+                _store_rejected(raw, niche, country, city, "landline_no_email",
+                                f"{phone} is a landline and there is no email address")
+                reasons["landline_no_email"] = reasons.get("landline_no_email", 0) + 1
                 continue
 
             # Fit score ranks the CEO review queue: best prospects first,

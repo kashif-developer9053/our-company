@@ -1110,6 +1110,7 @@ async def whatsapp_leads(status: str = "all", only_usable: bool = True, limit: i
         "_id": 0, "id": 1, "business_name": 1, "niche": 1, "city": 1, "phone": 1,
         "whatsapp": 1, "collection_reason": 1, "opportunity_score": 1,
         "created_at": 1, "appears_no_website": 1, "site_audit.findings.code": 1,
+        "wa_verified": 1,
     }
     out: list[dict] = []
     counts: dict[str, int] = {"total": 0, "unusable": 0}
@@ -1166,6 +1167,22 @@ async def whatsapp_leads(status: str = "all", only_usable: bool = True, limit: i
 class WaMessageBody(BaseModel):
     lead_id: str
     language: str = "english"   # english | roman_urdu
+
+
+class WaVerifyBody(BaseModel):
+    limit: int = 200
+    recheck: bool = False
+
+
+@router.post("/whatsapp/verify-numbers")
+@safe_endpoint("agent3")
+async def whatsapp_verify_numbers(body: WaVerifyBody):
+    """Check which numbers actually have WhatsApp.
+
+    Landlines are settled locally for free; only genuine mobiles cost a check.
+    """
+    from .wa_verify import verify_leads
+    return await verify_leads(limit=body.limit, recheck=body.recheck)
 
 
 @router.post("/whatsapp/message")

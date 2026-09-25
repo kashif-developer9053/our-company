@@ -460,6 +460,8 @@ export const retryFailedDrafts = (body: { draft_ids?: string[] }) =>
 export interface WhatsAppLead {
   issue?: string;
   created_at?: string;
+  // yes | no | unknown | "" (never checked)
+  has_whatsapp?: string;
   id: string; business_name: string; niche: string; city: string;
   phone_raw: string; number: string; usable: boolean;
   status: "not_contacted" | "message_sent" | "replied" | "interested" | "not_interested" | "invalid_number";
@@ -480,6 +482,11 @@ export const getWhatsAppLeads = (
                cities: WaFacet[]; issues: WaFacet[] }>(
     `/agent3/whatsapp/leads?${q.toString()}`);
 };
+export const verifyWhatsAppNumbers = (body: { limit?: number; recheck?: boolean } = {}) =>
+  req<{ ok: boolean; checked?: number; counts?: Record<string, number>;
+        message?: string; error?: string }>(
+    "/agent3/whatsapp/verify-numbers", { method: "POST", body: JSON.stringify(body) });
+
 export const writeWhatsAppMessage = (lead_id: string, language: "english" | "roman_urdu" = "english") =>
   req<{ ok: boolean; lead_id?: string; number?: string; message?: string; link?: string; error?: string }>(
     "/agent3/whatsapp/message", { method: "POST", body: JSON.stringify({ lead_id, language }) });

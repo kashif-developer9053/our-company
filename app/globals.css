@@ -1639,3 +1639,9 @@ body {
   color: #d9c98a;
   white-space: nowrap;
 }
+
+/* Whether a number actually has WhatsApp. Landlines are decided locally and
+   free; mobiles need the validator, so "not checked" is a real third state. */
+.wa-yes     { color: #8fe000; font-size: 11px; white-space: nowrap; }
+.wa-no      { color: #e08f8f; font-size: 11px; white-space: nowrap; }
+.wa-unknown { color: #d9c98a; font-size: 11px; white-space: nowrap; }

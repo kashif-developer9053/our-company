@@ -181,6 +181,19 @@ export default function WhatsAppPanel() {
     setMsg("WhatsApp opened here. Keep this tab open — the next lead reuses it.");
   };
 
+  const verifyNumbers = async () => {
+    setBusy("verify"); setMsg(null);
+    try {
+      const r = await api.verifyWhatsAppNumbers({ limit: 500 });
+      if (!r.ok) { setMsg(`⚠ ${r.error}`); return; }
+      const c = r.counts || {};
+      setMsg(r.message ?? `Checked ${r.checked}: ${c.yes ?? 0} on WhatsApp, ` +
+             `${(c.no ?? 0) + (c.skipped_landline ?? 0)} not, ${c.unknown ?? 0} unclear.`);
+      await load(filter);
+    } catch (e) { setMsg(`⚠ ${(e as Error).message}`); }
+    finally { setBusy(null); }
+  };
+
   const setStatus = async (l: WhatsAppLead, status: string) => {
     setBusy(l.id);
     try {
@@ -263,6 +276,11 @@ export default function WhatsAppPanel() {
             Clear filters
           </button>
         )}
+        <button className="btn-mini" type="button" disabled={busy === "verify"}
+          title="Check which numbers actually have WhatsApp. Landlines are settled for free."
+          onClick={verifyNumbers}>
+          {busy === "verify" ? "Checking…" : "Verify numbers"}
+        </button>
         <span className="muted small" style={{ marginLeft: "auto" }}>
           {leads.length} shown · newest first
         </span>
@@ -276,7 +294,7 @@ export default function WhatsAppPanel() {
         <div className="table-wrap">
           <table className="leads-table">
             <thead>
-              <tr><th>Business</th><th>Problem</th><th>Number</th><th>Status</th><th>Remarks</th><th></th></tr>
+              <tr><th>Business</th><th>Problem</th><th>Number</th><th>WhatsApp</th><th>Status</th><th>Remarks</th><th></th></tr>
             </thead>
             <tbody>
               {leads.map((l) => (
@@ -312,6 +330,12 @@ export default function WhatsAppPanel() {
                       : <span className="muted small">—</span>}
                   </td>
                   <td className="muted">+{l.number}</td>
+                  <td>
+                    {l.has_whatsapp === "yes" ? <span className="wa-yes">✓ on WhatsApp</span>
+                      : l.has_whatsapp === "no" ? <span className="wa-no">✗ no WhatsApp</span>
+                      : l.has_whatsapp === "unknown" ? <span className="wa-unknown">? unverified</span>
+                      : <span className="muted small">not checked</span>}
+                  </td>
                   <td>
                     <select className="af-input" style={{ minWidth: 130 }} value={l.status}
                       onChange={(e) => setStatus(l, e.target.value)}>
