@@ -100,13 +100,13 @@ export default function WhatsAppPanel() {
   };
 
   // Re-encode the link whenever the CEO edits the text before sending.
-  // web.whatsapp.com/send goes straight to the chat; wa.me is a redirector
-  // that bounces through an interstitial and reloads WhatsApp Web each time.
-  // The URL wa.me itself resolves to, used directly to skip the redirect.
-  // web.whatsapp.com/send often landed on an empty chat when steered into an
-  // already-open tab; app_absent=0 tells WhatsApp to use the running session.
+  // MUST stay on web.whatsapp.com. api.whatsapp.com is a landing page that
+  // redirects here, so steering the linked tab at it navigated away from the
+  // logged-in session and bounced back — which is why the link appeared to
+  // fail and a fresh page loaded every time. Same origin as the tab we opened
+  // means WhatsApp Web handles it internally and just switches chat.
   const linkFor = (l: WhatsAppLead) =>
-    `https://api.whatsapp.com/send/?phone=${l.number}` +
+    `https://web.whatsapp.com/send?phone=${l.number}` +
     `&text=${encodeURIComponent(draft)}&type=phone_number&app_absent=0`;
 
   // The desktop app is a single window that switches chats in place, so it
