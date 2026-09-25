@@ -36,6 +36,26 @@ CRITICAL, HIGH, MEDIUM, LOW = "critical", "high", "medium", "low"
 # Weight per severity — used to score how good a prospect this is.
 _WEIGHT = {CRITICAL: 40, HIGH: 20, MEDIUM: 10, LOW: 4}
 
+# The only findings worth contacting a stranger about: things the owner is
+# already losing money to and would recognise instantly. A missing meta tag or
+# H1 is real work, but it is not why anyone hires an agency, and leading with
+# it reads as hunting for something to sell.
+_QUALIFYING_CODES = {
+    "no_website",          # nothing to find at all — the strongest pitch
+    "site_unreachable",    # the site does not open
+    "http_error",          # visitors hit an error page
+    "very_slow",           # people leave before it loads
+    "slow",
+    "not_mobile_friendly", # unusable on the phone most customers use
+    "no_https",            # the browser warns people away
+    "no_contact_route",    # nobody can get in touch
+    "no_contact_form",
+    "outdated_cms",        # a genuine security exposure
+    # Invisible online despite having a site — the owner feels this one too.
+    "no_reviews",
+    "poor_rating",
+}
+
 # A site scoring at/above this is a genuine opportunity worth contacting.
 QUALIFY_THRESHOLD = 20
 
@@ -117,14 +137,14 @@ def _check_seo(html: str) -> list[dict]:
 
     if not re.search(r"<meta[^>]+name=[\"']description[\"']", html, re.I):
         out.append(_finding(
-            "no_meta_description", HIGH, "No meta description",
+            "no_meta_description", LOW, "No meta description",
             "No <meta name=\"description\"> on the homepage",
             "Google writes its own snippet — a written description improves click-through."))
 
     h1s = re.findall(r"<h1[^>]*>(.*?)</h1>", html, re.I | re.S)
     if not h1s:
         out.append(_finding(
-            "no_h1", HIGH, "No H1 heading",
+            "no_h1", LOW, "No H1 heading",
             "No <h1> element found",
             "Search engines can't identify the page topic — on-page SEO work."))
 
@@ -206,7 +226,7 @@ def _check_tech_debt(html: str, headers: dict) -> list[dict]:
                 pass
     if re.search(r"<(table)[^>]*>\s*<tr", low) and low.count("<table") > 3:
         out.append(_finding(
-            "table_layout", HIGH, "Outdated table-based layout",
+            "table_layout", LOW, "Outdated table-based layout",
             f"{low.count('<table')} <table> elements used for page structure",
             "Legacy markup that breaks on mobile — modern responsive rebuild."))
     if "<font" in low or "bgcolor=" in low:
@@ -217,7 +237,7 @@ def _check_tech_debt(html: str, headers: dict) -> list[dict]:
     # Only real embedded Flash objects — not the word "flash" in unrelated JS/CSS.
     if re.search(r"\.swf\b|application/x-shockwave-flash|<embed[^>]+swf", low):
         out.append(_finding(
-            "flash_content", HIGH, "Flash content detected",
+            "flash_content", LOW, "Flash content detected",
             "Embedded .swf / Shockwave object found",
             "Flash is dead in all browsers — that content is invisible today."))
     return out
@@ -309,10 +329,13 @@ async def audit_site(website: str, client: httpx.AsyncClient | None = None) -> d
     result["findings"] = findings
     result["score"] = score
     result["severity_counts"] = counts
-    # Qualify only on a real problem: a critical/high finding, or enough medium
-    # ones to matter. LOW-only noise (e.g. "no WhatsApp") never qualifies a lead.
-    substantial = counts.get(CRITICAL, 0) + counts.get(HIGH, 0)
-    result["qualified"] = bool(substantial) or counts.get(MEDIUM, 0) >= 3
+    # Qualify on a problem the OWNER would recognise as costing them business,
+    # never on tidy-up work. Counting severities was not enough: 214 leads
+    # qualified on cosmetic findings alone, 11 of them on "no H1 heading" by
+    # itself. Nobody hires an agency because a tag is missing, and pitching it
+    # makes us look like we are hunting for something to sell.
+    codes = {f["code"] for f in findings}
+    result["qualified"] = bool(codes & _QUALIFYING_CODES)
     result["headline"] = findings[0]["title"] if findings else "No significant issues found"
     result["summary"] = build_reason(result)  # after `qualified` is set above
     return result
@@ -337,6 +360,49 @@ def build_reason(audit: dict) -> str:
 def build_pitch_points(audit: dict) -> list[str]:
     """The service angles this audit justifies — fed to Agent 3 for the email."""
     return [f["pitch"] for f in audit.get("findings", [])[:4]]
+
+
+def _add_presence_findings(lead: dict, audit: dict) -> None:
+    """Problems visible from outside the site itself.
+
+    A business can have a technically fine website and still be invisible: no
+    reviews, or a rating bad enough to put people off. Those are things the
+    owner already feels, unlike a missing meta tag, so they qualify a lead in
+    their own right. The numbers come from the Maps card the scraper reads.
+    """
+    reviews = lead.get("reviews_count")
+    rating = lead.get("rating")
+    extra = []
+
+    if isinstance(reviews, int):
+        if reviews == 0:
+            extra.append(_finding(
+                "no_reviews", HIGH, "No Google reviews",
+                "No reviews on their Google listing",
+                "Nothing reassures someone comparing them with a rated competitor."))
+        elif reviews <= 5:
+            extra.append(_finding(
+                "few_reviews", MEDIUM, f"Only {reviews} Google reviews",
+                f"{reviews} reviews on their Google listing",
+                "Too few for anyone to trust when a competitor shows dozens."))
+
+    if isinstance(rating, (int, float)) and 0 < rating < 3.5:
+        extra.append(_finding(
+            "poor_rating", HIGH, f"Low rating ({rating})",
+            f"Google rating of {rating}",
+            "People check the stars before they call — this actively loses them work."))
+
+    if not extra:
+        return
+
+    audit.setdefault("findings", []).extend(extra)
+    counts = audit.setdefault("severity_counts", {})
+    for f in extra:
+        counts[f["severity"]] = counts.get(f["severity"], 0) + 1
+        audit["score"] = audit.get("score", 0) + _WEIGHT.get(f["severity"], 0)
+    codes = {f["code"] for f in audit["findings"]}
+    audit["qualified"] = bool(codes & _QUALIFYING_CODES)
+    audit["summary"] = build_reason(audit)
 
 
 async def audit_leads(leads: list[dict], concurrency: int = 5) -> int:
@@ -367,6 +433,7 @@ async def audit_leads(leads: list[dict], concurrency: int = 5) -> int:
                 return True
             async with sem:
                 audit = await audit_site(site, client)
+            _add_presence_findings(lead, audit)
             lead["site_audit"] = audit
             lead["collection_reason"] = audit["summary"]
             lead["opportunity_score"] = audit["score"]
