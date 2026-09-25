@@ -299,6 +299,19 @@ export default function WhatsAppPanel() {
                   <td>
                     <span className="lead-name">{l.business_name}</span>
                     <span className="muted small"> · {l.city}</span>
+                    {/* Where the number came from. Someone we messaged asked
+                        how we got his details and there was no way to answer
+                        from this screen — anyone contacting a stranger should
+                        be able to say, before they press send. */}
+                    {l.source && (
+                      <div className="wa-source">
+                        from {l.source}
+                        {l.collected_at ? ` · ${l.collected_at}` : ""}
+                        {l.source_url && (
+                          <> · <a href={l.source_url} target="_blank" rel="noreferrer">source</a></>
+                        )}
+                      </div>
+                    )}
                     {l.collection_reason && (
                       <div className="draft-reason" style={{ marginTop: 4 }}>{l.collection_reason.slice(0, 90)}</div>
                     )}

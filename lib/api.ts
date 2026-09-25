@@ -464,6 +464,10 @@ export interface WhatsAppLead {
   has_whatsapp?: string;
   // Languages worth offering, from the lead's country/city. First is local.
   languages?: { code: string; label: string }[];
+  // Where this lead's details came from, for answering "how did you get my number".
+  source?: string;
+  source_url?: string;
+  collected_at?: string;
   id: string; business_name: string; niche: string; city: string;
   phone_raw: string; number: string; usable: boolean;
   status: "not_contacted" | "message_sent" | "replied" | "interested" | "not_interested" | "invalid_number";

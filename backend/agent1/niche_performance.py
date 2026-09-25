@@ -39,7 +39,7 @@ _MIN_LEADS_FOR_DISCARD_SIGNAL = 10
 # Placeholder text from a failed scrape, which otherwise scores well because
 # nobody ever bothered to discard it.
 _JUNK_RE = __import__("re").compile(
-    r"lorem|ipsum|dolor|consectetur|excepteur|pariatur|minim|^test|example", __import__("re").I)
+    r"lorem|ipsum|dolor|consectetur|excepteur|pariatur|\bminim\b|^test\b|example", __import__("re").I)
 
 
 def _norm(niche: str) -> str:

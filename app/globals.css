@@ -1645,3 +1645,12 @@ body {
 .wa-yes     { color: #8fe000; font-size: 11px; white-space: nowrap; }
 .wa-no      { color: #e08f8f; font-size: 11px; white-space: nowrap; }
 .wa-unknown { color: #d9c98a; font-size: 11px; white-space: nowrap; }
+
+/* Provenance under each WhatsApp lead. A person we contacted asked where we
+   got his number; the answer should be on screen before the message is sent. */
+.wa-source {
+  font-size: 10.5px;
+  color: #6e7a8f;
+  margin-top: 2px;
+}
+.wa-source a { color: #7fb2ea; }

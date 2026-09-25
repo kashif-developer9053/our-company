@@ -102,6 +102,10 @@ def classify(lead: dict) -> tuple[str, str]:
     if m:
         return "competitor", f"appears to sell IT/web services ({m.group(0).strip()})"
 
+    if _looks_personal(lead):
+        return "blocked", ("looks like a private individual, not a business — "
+                           "no trade name, website, email or reviews")
+
     too_big, why = _already_well_served(lead)
     if too_big:
         return "too_big", why
@@ -147,6 +151,47 @@ _CORPORATE_RE = re.compile(
 # have someone handling its web presence. Chosen from the data: local shops and
 # clinics sit in the tens, national chains in the thousands.
 _WELL_SERVED_REVIEWS = 1500
+
+
+# A business listing carries some marker of being a business: a trade word, a
+# legal suffix, or at least a descriptive phrase. Anyone can add a place to
+# Google Maps, so a private individual's mobile ends up filed under "Dentist"
+# with only their own name attached — one such person asked us how we got his
+# number and said he was being pestered for jobs. Contacting a stranger's
+# personal phone is worse than missing a lead.
+_BUSINESS_MARKER = re.compile(
+    r"\b(?:clinic|centre|center|hospital|medical|dental|dentist|pharmacy|lab|"
+    r"school|academy|college|institute|store|shop|mart|market|traders?|trading|"
+    r"enterprises?|industries|manufactur\w*|factory|mills?|works|workshop|"
+    r"services?|solutions?|studio|salon|spa|gym|fitness|restaurant|cafe|bakery|"
+    r"hotel|motors?|auto|garage|builders?|construction|estate|properties|travel|"
+    r"tours?|transport|logistics|courier|associates|partners|group|company|"
+    r"ltd|pvt|llc|inc|plc|corp\w*|consult\w*|agency|bureau|office|house|"
+    r"point|hub|zone|care|health|surgery|practice|firm|chambers|"
+    r"furnitures?|furnishers?|interiors?|d[eé]cor|electronics|hardware|"
+    r"textiles?|garments?|wood|bed|beds|sons|brothers)\b"
+    r"|مجمع|عيادة|مركز|مستشفى|صيدلية|شركة|مؤسسة|مكتب",
+    re.I)
+
+
+def _looks_personal(lead: dict) -> bool:
+    """A listing that names a person rather than a business.
+
+    Deliberately narrow: only a short name with no business marker, no website
+    and no email. "Ali Furniture" and "Mr Bed" are real shops and must pass —
+    the target is a bare "AboRakan" with nothing else attached.
+    """
+    name = str(lead.get("business_name") or "").strip()
+    if not name or len(name.split()) > 2:
+        return False
+    if _BUSINESS_MARKER.search(name):
+        return False
+    if (lead.get("website") or "").strip() or (lead.get("email") or "").strip():
+        return False
+    # A rating or reviews means Google has it as a real, visited place.
+    if lead.get("reviews_count") or lead.get("rating"):
+        return False
+    return True
 
 
 def _already_well_served(lead: dict) -> tuple[bool, str]:

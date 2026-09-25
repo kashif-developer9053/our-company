@@ -1111,7 +1111,8 @@ async def whatsapp_leads(status: str = "all", only_usable: bool = True, limit: i
         "_id": 0, "id": 1, "business_name": 1, "niche": 1, "city": 1, "phone": 1,
         "whatsapp": 1, "collection_reason": 1, "opportunity_score": 1,
         "created_at": 1, "appears_no_website": 1, "site_audit.findings.code": 1,
-        "country": 1,
+        "country": 1, "source": 1, "discovery_source": 1, "social_url": 1,
+        "website": 1,
         "wa_verified": 1,
     }
     out: list[dict] = []

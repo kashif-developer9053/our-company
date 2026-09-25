@@ -189,6 +189,13 @@ def serialize(lead: dict) -> dict:
         # Languages worth offering for this lead's country/city, best first.
         "languages": [{"code": c, "label": _lang_label(c)}
                       for c in _languages_for(lead.get("country", ""), lead.get("city", ""))],
+        # Where this number came from. A person we contacted asked how we got
+        # his details and we could not answer from the UI — anyone messaging a
+        # stranger should be able to say where the number came from before
+        # they press send.
+        "source": _source_label(lead),
+        "source_url": (lead.get("social_url") or lead.get("website") or ""),
+        "collected_at": str(lead.get("created_at") or "")[:10],
         "created_at": lead.get("created_at", ""),
     }
 
@@ -209,6 +216,33 @@ _ISSUE_ORDER = (
     ("no_contact_form", "No enquiry form"),
     ("outdated_cms", "Outdated software"),
 )
+
+
+# Raw source values, mapped to something a person can read aloud. If someone
+# asks "where did you get my number", the answer has to be in front of you.
+_SOURCE_LABELS = {
+    "agent1_harvest": "Google Maps listing",
+    "agent1_google_maps": "Google Maps listing",
+    "agent1_scrape": "Google Maps listing",
+    "agent1_custom_web_crawler": "their website",
+    "agent1_social_miner": "public Facebook/Instagram page",
+    "agent1_multi_source": "Google Maps + web search",
+    "manual": "added by hand",
+}
+
+
+def _source_label(lead: dict) -> str:
+    """Where this lead's details came from, in plain words."""
+    disc = (lead.get("discovery_source") or "").strip().lower()
+    if "facebook" in disc:
+        return "public Facebook page"
+    if "instagram" in disc:
+        return "public Instagram page"
+    if "duckduckgo" in disc or "yahoo" in disc:
+        return "web search result"
+    if "google_maps" in disc:
+        return "Google Maps listing"
+    return _SOURCE_LABELS.get((lead.get("source") or "").strip().lower(), "")
 
 
 def _headline_issue(lead: dict) -> str:
