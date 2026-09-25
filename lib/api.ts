@@ -458,6 +458,8 @@ export const retryFailedDrafts = (body: { draft_ids?: string[] }) =>
 
 // ---- WhatsApp outreach (click-to-send, manual) ----------------------------
 export interface WhatsAppLead {
+  issue?: string;
+  created_at?: string;
   id: string; business_name: string; niche: string; city: string;
   phone_raw: string; number: string; usable: boolean;
   status: "not_contacted" | "message_sent" | "replied" | "interested" | "not_interested" | "invalid_number";
@@ -465,8 +467,19 @@ export interface WhatsAppLead {
   collection_reason: string; opportunity_score: number;
   site_audit?: { findings?: { code: string; severity: string; title: string; evidence: string; pitch: string }[] };
 }
-export const getWhatsAppLeads = (status = "all") =>
-  req<{ ok: boolean; leads: WhatsAppLead[]; counts: Record<string, number> }>(`/agent3/whatsapp/leads?status=${status}`);
+export interface WaFacet { value: string; count: number }
+export const getWhatsAppLeads = (
+  status = "all",
+  opts: { city?: string; issue?: string; sort?: "newest" | "score" } = {},
+) => {
+  const q = new URLSearchParams({ status });
+  if (opts.city) q.set("city", opts.city);
+  if (opts.issue) q.set("issue", opts.issue);
+  if (opts.sort) q.set("sort", opts.sort);
+  return req<{ ok: boolean; leads: WhatsAppLead[]; counts: Record<string, number>;
+               cities: WaFacet[]; issues: WaFacet[] }>(
+    `/agent3/whatsapp/leads?${q.toString()}`);
+};
 export const writeWhatsAppMessage = (lead_id: string, language: "english" | "roman_urdu" = "english") =>
   req<{ ok: boolean; lead_id?: string; number?: string; message?: string; link?: string; error?: string }>(
     "/agent3/whatsapp/message", { method: "POST", body: JSON.stringify({ lead_id, language }) });

@@ -1620,3 +1620,22 @@ body {
   white-space: nowrap;
 }
 .wa-modetoggle input { cursor: pointer; }
+
+/* WhatsApp desk: city/problem filters and the headline problem per row.
+   Knowing the problem at a glance is what makes a list of numbers workable. */
+.wa-filters {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin: 10px 0;
+}
+.wa-filters .af-input { width: auto; min-width: 150px; }
+.wa-issue {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid #4a4326;
+  color: #d9c98a;
+  white-space: nowrap;
+}

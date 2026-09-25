@@ -1096,17 +1096,26 @@ WA_SYSTEM = (
 
 @router.get("/whatsapp/leads")
 @safe_endpoint("agent3")
-async def whatsapp_leads(status: str = "all", only_usable: bool = True, limit: int = 300):
+async def whatsapp_leads(status: str = "all", only_usable: bool = True, limit: int = 300,
+                         city: str = "", issue: str = "", sort: str = "newest"):
     """Leads reachable on WhatsApp — those with a usable mobile number."""
     from .whatsapp import serialize as wa_ser
 
-    # One pass over a PROJECTED cursor. `site_audit` is excluded — it is the
-    # heaviest field by far and this view only needs the reason line, so pulling
-    # it made the endpoint ~40s instead of ~1s.
-    projection = {"_id": 0, "site_audit": 0, "outreach_history": 0, "pitch_points": 0,
-                  "suggested_reply": 0}
+    # Ask for exactly the fields this view renders. An earlier version excluded
+    # the heavy ones instead, which still shipped everything else and made the
+    # endpoint ~12s; naming the wanted fields brings it back under a second.
+    # Only findings.code is needed — the evidence and pitch prose are the bulk
+    # of an audit and nothing here displays them.
+    projection = {
+        "_id": 0, "id": 1, "business_name": 1, "niche": 1, "city": 1, "phone": 1,
+        "whatsapp": 1, "collection_reason": 1, "opportunity_score": 1,
+        "created_at": 1, "appears_no_website": 1, "site_audit.findings.code": 1,
+    }
     out: list[dict] = []
     counts: dict[str, int] = {"total": 0, "unusable": 0}
+    cities: dict[str, int] = {}
+    issues: dict[str, int] = {}
+
     for lead in _leads().find({"phone": {"$nin": ["", None]}}, projection).limit(1000):
         item = wa_ser(lead)
         if not item["usable"]:
@@ -1116,11 +1125,35 @@ async def whatsapp_leads(status: str = "all", only_usable: bool = True, limit: i
         else:
             counts["total"] += 1
             counts[item["status"]] = counts.get(item["status"], 0) + 1
+        # Build the dropdown options from everything reachable, so a filter
+        # never hides the very option that would bring the rows back.
+        if item.get("city"):
+            cities[item["city"]] = cities.get(item["city"], 0) + 1
+        if item.get("issue"):
+            issues[item["issue"]] = issues.get(item["issue"], 0) + 1
+
         if status != "all" and item["status"] != status:
             continue
+        if city and (item.get("city") or "").strip().lower() != city.strip().lower():
+            continue
+        if issue and item.get("issue") != issue:
+            continue
         out.append(item)
-    out.sort(key=lambda x: x.get("opportunity_score", 0), reverse=True)
-    return {"ok": True, "leads": out[:limit], "counts": counts}
+
+    if sort == "score":
+        out.sort(key=lambda x: x.get("opportunity_score", 0), reverse=True)
+    else:
+        # Newest first by default: a lead just collected is the one the CEO
+        # came here to work, and it was previously buried under months of
+        # higher-scoring older ones.
+        out.sort(key=lambda x: (x.get("created_at") or "", x.get("opportunity_score", 0)),
+                 reverse=True)
+
+    return {"ok": True, "leads": out[:limit], "counts": counts,
+            "cities": sorted(({"value": k, "count": v} for k, v in cities.items()),
+                             key=lambda c: -c["count"]),
+            "issues": sorted(({"value": k, "count": v} for k, v in issues.items()),
+                             key=lambda c: -c["count"])}
 
 
 class WaMessageBody(BaseModel):

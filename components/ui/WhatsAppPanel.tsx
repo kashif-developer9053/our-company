@@ -30,6 +30,12 @@ const DAILY_SAFE_LIMIT = 30;
 export default function WhatsAppPanel() {
   const [leads, setLeads] = useState<WhatsAppLead[]>([]);
   const [counts, setCounts] = useState<Record<string, number>>({});
+  // City and problem filters, plus their options, which come from the server
+  // so they always reflect the leads that actually exist.
+  const [cityFilter, setCityFilter] = useState("");
+  const [issueFilter, setIssueFilter] = useState("");
+  const [cities, setCities] = useState<api.WaFacet[]>([]);
+  const [issues, setIssues] = useState<api.WaFacet[]>([]);
   const [filter, setFilter] = useState<string>("not_contacted");
   const [lang, setLang] = useState<"english" | "roman_urdu">("english");
   // Language per number: the same list mixes contacts who read English
@@ -67,10 +73,11 @@ export default function WhatsAppPanel() {
 
   const load = useCallback(async (f: string) => {
     try {
-      const r = await api.getWhatsAppLeads(f);
+      const r = await api.getWhatsAppLeads(f, { city: cityFilter, issue: issueFilter });
       setLeads(r.leads); setCounts(r.counts);
+      setCities(r.cities ?? []); setIssues(r.issues ?? []);
     } catch { /* backend down */ }
-  }, []);
+  }, [cityFilter, issueFilter]);
   useEffect(() => { load(filter); }, [filter, load]);
 
   // The indicator must not claim a link that no longer exists.
@@ -235,6 +242,32 @@ export default function WhatsAppPanel() {
         </span>
       </div>
 
+      <div className="wa-filters">
+        <select className="af-input" value={cityFilter}
+          onChange={(e) => setCityFilter(e.target.value)}>
+          <option value="">All cities</option>
+          {cities.map((c) => (
+            <option key={c.value} value={c.value}>{c.value} ({c.count})</option>
+          ))}
+        </select>
+        <select className="af-input" value={issueFilter}
+          onChange={(e) => setIssueFilter(e.target.value)}>
+          <option value="">Any problem</option>
+          {issues.map((i) => (
+            <option key={i.value} value={i.value}>{i.value} ({i.count})</option>
+          ))}
+        </select>
+        {(cityFilter || issueFilter) && (
+          <button className="btn-mini" type="button"
+            onClick={() => { setCityFilter(""); setIssueFilter(""); }}>
+            Clear filters
+          </button>
+        )}
+        <span className="muted small" style={{ marginLeft: "auto" }}>
+          {leads.length} shown · newest first
+        </span>
+      </div>
+
       {msg && <div className="pending-msg">{msg}</div>}
 
       {leads.length === 0 ? (
@@ -243,7 +276,7 @@ export default function WhatsAppPanel() {
         <div className="table-wrap">
           <table className="leads-table">
             <thead>
-              <tr><th>Business</th><th>Number</th><th>Status</th><th>Remarks</th><th></th></tr>
+              <tr><th>Business</th><th>Problem</th><th>Number</th><th>Status</th><th>Remarks</th><th></th></tr>
             </thead>
             <tbody>
               {leads.map((l) => (
@@ -272,6 +305,11 @@ export default function WhatsAppPanel() {
                         </div>
                       </div>
                     )}
+                  </td>
+                  <td>
+                    {l.issue
+                      ? <span className="wa-issue">{l.issue}</span>
+                      : <span className="muted small">—</span>}
                   </td>
                   <td className="muted">+{l.number}</td>
                   <td>

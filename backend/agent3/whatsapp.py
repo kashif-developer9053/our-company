@@ -129,4 +129,42 @@ def serialize(lead: dict) -> dict:
         "collection_reason": lead.get("collection_reason", ""),
         "opportunity_score": lead.get("opportunity_score", 0),
         "site_audit": audit if isinstance(audit, dict) else {},
+        # The single headline problem, so the list can be filtered and scanned
+        # without loading every lead's full audit.
+        "issue": _headline_issue(lead),
+        "created_at": lead.get("created_at", ""),
     }
+
+
+# Problems worth filtering by, strongest first: the first one a lead has is the
+# one worth leading a message with.
+_ISSUE_ORDER = (
+    ("no_website", "No website"),
+    ("site_unreachable", "Site doesn't load"),
+    ("http_error", "Site shows an error"),
+    ("no_reviews", "No Google reviews"),
+    ("poor_rating", "Low rating"),
+    ("very_slow", "Very slow site"),
+    ("slow", "Slow site"),
+    ("not_mobile_friendly", "Not mobile friendly"),
+    ("no_https", "Not secure"),
+    ("no_contact_route", "No way to contact"),
+    ("no_contact_form", "No enquiry form"),
+    ("outdated_cms", "Outdated software"),
+)
+
+
+def _headline_issue(lead: dict) -> str:
+    """The strongest problem this lead has, as a short label."""
+    audit = lead.get("site_audit")
+    if not isinstance(audit, dict):
+        # site_audit is projected away on the list endpoint for speed, so fall
+        # back to the flag the scraper sets when there was no site at all.
+        return "No website" if lead.get("appears_no_website") else ""
+    codes = {f.get("code") for f in (audit.get("findings") or [])}
+    if not codes and lead.get("appears_no_website"):
+        return "No website"
+    for code, label in _ISSUE_ORDER:
+        if code in codes:
+            return label
+    return ""
