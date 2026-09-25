@@ -187,8 +187,10 @@ export default function WhatsAppPanel() {
       const r = await api.verifyWhatsAppNumbers({ limit: 500 });
       if (!r.ok) { setMsg(`⚠ ${r.error}`); return; }
       const c = r.counts || {};
+      const credits = r.credits_remaining != null
+        ? ` ${r.credits_remaining} credits left.` : "";
       setMsg(r.message ?? `Checked ${r.checked}: ${c.yes ?? 0} on WhatsApp, ` +
-             `${(c.no ?? 0) + (c.skipped_landline ?? 0)} not, ${c.unknown ?? 0} unclear.`);
+             `${(c.no ?? 0) + (c.skipped_landline ?? 0)} not, ${c.unknown ?? 0} unclear.${credits}`);
       await load(filter);
     } catch (e) { setMsg(`⚠ ${(e as Error).message}`); }
     finally { setBusy(null); }

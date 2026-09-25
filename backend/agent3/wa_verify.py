@@ -14,10 +14,9 @@ Two layers, cheapest first:
   * This module confirms the rest. A mobile number can still have no WhatsApp
     account, and only the provider knows.
 
-Provider-agnostic on purpose: CheckNumber.AI is the default because it states
-plainly that it never binds your account, but the request shape is ordinary
-JSON and the base URL is configurable, so swapping provider is a settings
-change rather than a code change.
+Targets WA Validator's documented API (POST /bulk-check/, Bearer auth,
+results[].exists). The base URL is a setting, so another provider with the
+same shape can be swapped in without a code change.
 """
 
 from __future__ import annotations
@@ -32,8 +31,9 @@ from shared.settings_store import get_setting_value
 
 log = get_logger("agent3.wa_verify")
 
-_DEFAULT_BASE = "https://api.checknumber.ai/v1"
-_TIMEOUT = 25.0
+_DEFAULT_BASE = "https://wavalidator.com/api/v1"
+_TIMEOUT = 60.0        # bulk calls are slower than a single lookup
+_BULK_SIZE = 50        # numbers per request
 
 # Verdicts stored on the lead.
 HAS_WA = "yes"
@@ -53,57 +53,43 @@ def _base_url() -> str:
     return (get_setting_value("wa_validator_base_url") or _DEFAULT_BASE).rstrip("/")
 
 
-def _read_verdict(payload: dict) -> str:
-    """Normalise whatever shape the provider returns into yes/no/unknown.
+async def check_batch(client: httpx.AsyncClient, numbers: list[str],
+                      key: str, base: str) -> tuple[dict[str, str], str, int | None]:
+    """Check up to _BULK_SIZE numbers in one call.
 
-    Validators disagree on field names — exists, is_valid, status, whatsapp —
-    so check the common ones rather than binding to one provider's schema.
+    Returns (verdict by number, error, credits remaining). Bulk rather than
+    one-at-a-time because the provider bills per number either way and 372
+    separate round trips would take minutes.
     """
-    if not isinstance(payload, dict):
-        return UNKNOWN
-    for key in ("exists", "is_whatsapp", "has_whatsapp", "whatsapp", "is_valid", "valid"):
-        if key in payload:
-            val = payload[key]
-            if isinstance(val, bool):
-                return HAS_WA if val else NO_WA
-            if isinstance(val, str):
-                low = val.strip().lower()
-                if low in ("true", "yes", "valid", "active", "registered"):
-                    return HAS_WA
-                if low in ("false", "no", "invalid", "not_found", "unregistered"):
-                    return NO_WA
-    status = str(payload.get("status") or payload.get("result") or "").strip().lower()
-    if status in ("valid", "exists", "active", "registered", "success"):
-        return HAS_WA
-    if status in ("invalid", "not_found", "unregistered", "inactive"):
-        return NO_WA
-    return UNKNOWN
-
-
-async def check_number(client: httpx.AsyncClient, number: str, key: str, base: str) -> dict:
-    """Check one number. Never raises — an unreachable provider is 'unknown'."""
-    digits = "".join(ch for ch in (number or "") if ch.isdigit())
-    if not digits:
-        return {"number": number, "verdict": UNKNOWN, "error": "no number"}
+    if not numbers:
+        return {}, "", None
     try:
         r = await client.post(
-            f"{base}/whatsapp/check",
+            f"{base}/bulk-check/",
             headers={"Authorization": f"Bearer {key}", "content-type": "application/json"},
-            json={"number": digits},
+            json={"numbers": numbers},
         )
-        if r.status_code == 401:
-            return {"number": digits, "verdict": UNKNOWN, "error": "validator rejected the API key"}
-        if r.status_code == 402:
-            return {"number": digits, "verdict": UNKNOWN, "error": "validator credit exhausted"}
+        if r.status_code in (401, 403):
+            return {}, "the validator rejected the API key", None
+        if r.status_code in (402, 429):
+            return {}, "validator credits exhausted or rate limited", None
         if r.status_code != 200:
-            return {"number": digits, "verdict": UNKNOWN,
-                    "error": f"validator returned {r.status_code}"}
+            return {}, f"validator returned {r.status_code}", None
+
         data = r.json()
-        # Some providers nest the result.
-        payload = data.get("data") if isinstance(data.get("data"), dict) else data
-        return {"number": digits, "verdict": _read_verdict(payload), "raw": payload}
+        out: dict[str, str] = {}
+        for row in data.get("results") or []:
+            num = str(row.get("number") or "")
+            exists = row.get("exists")
+            if exists is True:
+                out[num] = HAS_WA
+            elif exists is False:
+                out[num] = NO_WA
+            else:
+                out[num] = UNKNOWN
+        return out, "", data.get("credits_remaining")
     except httpx.HTTPError as exc:
-        return {"number": digits, "verdict": UNKNOWN, "error": f"{type(exc).__name__}"}
+        return {}, f"could not reach the validator ({type(exc).__name__})", None
 
 
 async def verify_leads(limit: int = 200, recheck: bool = False) -> dict:
@@ -135,26 +121,42 @@ async def verify_leads(limit: int = 200, recheck: bool = False) -> dict:
     base = _base_url()
     counts: dict[str, int] = {HAS_WA: 0, NO_WA: 0, UNKNOWN: 0, "skipped_landline": 0}
     errors: set[str] = set()
+    credits: int | None = None
+
+    # Settle the landlines locally first — they cost nothing and must never
+    # consume a paid credit.
+    pending: list[tuple[str, str]] = []          # (lead id, number)
+    for lead in leads:
+        number = normalise_number(lead.get("phone", ""))
+        if not number or not looks_mobile(number):
+            db["leads"].update_one({"id": lead["id"]}, {"$set": {"wa_verified": {
+                "verdict": NO_WA, "reason": "landline", "at": _now()}}})
+            counts["skipped_landline"] += 1
+            continue
+        pending.append((lead["id"], number))
 
     async with httpx.AsyncClient(timeout=httpx.Timeout(_TIMEOUT)) as client:
-        for lead in leads:
-            number = normalise_number(lead.get("phone", ""))
-            # Do not spend a paid check on a number that cannot have WhatsApp.
-            if not number or not looks_mobile(number):
-                db["leads"].update_one({"id": lead["id"]}, {"$set": {"wa_verified": {
-                    "verdict": NO_WA, "reason": "landline", "at": _now()}}})
-                counts["skipped_landline"] += 1
-                continue
+        for start in range(0, len(pending), _BULK_SIZE):
+            chunk = pending[start:start + _BULK_SIZE]
+            verdicts, error, left = await check_batch(
+                client, [n for _id, n in chunk], key, base)
+            if left is not None:
+                credits = left
+            if error:
+                errors.add(error)
+                # Out of credit or a bad key will not fix itself mid-run.
+                if "key" in error or "credits" in error:
+                    break
 
-            res = await check_number(client, number, key, base)
-            record = {"verdict": res["verdict"], "at": _now()}
-            if res.get("error"):
-                errors.add(res["error"])
-                record["error"] = res["error"]
-            db["leads"].update_one({"id": lead["id"]}, {"$set": {"wa_verified": record}})
-            counts[res["verdict"]] = counts.get(res["verdict"], 0) + 1
-            await asyncio.sleep(0.15)   # stay friendly with the provider
+            for lead_id, number in chunk:
+                verdict = verdicts.get(number, UNKNOWN)
+                record = {"verdict": verdict, "at": _now()}
+                if error:
+                    record["error"] = error
+                db["leads"].update_one({"id": lead_id}, {"$set": {"wa_verified": record}})
+                counts[verdict] = counts.get(verdict, 0) + 1
+            await asyncio.sleep(0.3)   # stay friendly with the provider
 
     log.info("WhatsApp verification: %s", counts)
     return {"ok": True, "checked": len(leads), "counts": counts,
-            "errors": sorted(errors)[:3]}
+            "credits_remaining": credits, "errors": sorted(errors)[:3]}

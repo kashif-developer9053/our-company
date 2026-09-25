@@ -484,7 +484,7 @@ export const getWhatsAppLeads = (
 };
 export const verifyWhatsAppNumbers = (body: { limit?: number; recheck?: boolean } = {}) =>
   req<{ ok: boolean; checked?: number; counts?: Record<string, number>;
-        message?: string; error?: string }>(
+        credits_remaining?: number | null; message?: string; error?: string }>(
     "/agent3/whatsapp/verify-numbers", { method: "POST", body: JSON.stringify(body) });
 
 export const writeWhatsAppMessage = (lead_id: string, language: "english" | "roman_urdu" = "english") =>
