@@ -1116,7 +1116,14 @@ async def whatsapp_leads(status: str = "all", only_usable: bool = True, limit: i
     cities: dict[str, int] = {}
     issues: dict[str, int] = {}
 
-    for lead in _leads().find({"phone": {"$nin": ["", None]}}, projection).limit(1000):
+    # Sort in the DATABASE, not after the cut. The scan was capped at 1000 and
+    # Mongo returns insertion order, so with 1171 phone-bearing leads the most
+    # recent 171 were never read at all — a fresh batch of Jubail leads was
+    # invisible here while sitting in the CRM. Sorting first means the cap
+    # trims the oldest rather than the newest.
+    cursor = (_leads().find({"phone": {"$nin": ["", None]}}, projection)
+              .sort("created_at", -1).limit(1500))
+    for lead in cursor:
         item = wa_ser(lead)
         if not item["usable"]:
             counts["unusable"] += 1
