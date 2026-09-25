@@ -37,6 +37,8 @@ from .niche_services import services_line as niche_services_line
 from .reply_text import quick_read as reply_quick_read
 from .reply_text import strip_quoted
 from .reply_text import summarise as reply_summary
+from .wa_safety import extract_message as wa_extract_message
+from .wa_safety import message_issues as wa_message_issues
 from .suppression import is_suppressed, record_event, suppress as suppress_addr
 from .suppression import stats as suppression_stats
 from .verify_email import verify as verify_address
@@ -1084,7 +1086,11 @@ WA_SYSTEM = (
     "We build school sites plus fee, admission and attendance systems.\n"
     "Would you like to see a sample?\n"
     "www.eldiancore.com\n\n"
-    "Match that length, rhythm and ending exactly."
+    "Match that length, rhythm and ending exactly.\n\n"
+    "OUTPUT: the finished message and nothing else. Do not restate the task, do not label the "
+    "lines ('Line 1:', 'Greeting'), do not plan out loud, do not count the words afterwards, "
+    "and do not use markdown bullets or asterisks. The next thing you write is read by the "
+    "business owner exactly as typed."
 )
 
 
@@ -1175,7 +1181,30 @@ async def whatsapp_message(body: WaMessageBody):
     if not res["ok"]:
         return {"ok": False, "error": res["error"]}
 
-    message = res["text"].strip().strip('"')
+    # The email path has always had a send-safety gate; this one had none and
+    # stored whatever came back — including a generation that was the model's
+    # own plan, complete with "Line 1: Greeting" and a word count. Recover the
+    # real message where it is embedded in the plan, and regenerate when it
+    # is not.
+    message = wa_extract_message(res["text"])
+    issues = wa_message_issues(message)
+    if issues:
+        log.warning("WhatsApp draft rejected for %s: %s",
+                    lead.get("business_name", ""), "; ".join(issues))
+        retry = await agent_task(
+            "agent3",
+            prompt + ("\n\nYour previous attempt was rejected: "
+                      f"{'; '.join(issues)}. Output ONLY the finished message the business "
+                      f"owner will read. No plan, no line labels, no word count, no markdown "
+                      f"bullets — just the message itself."),
+            max_tokens=400, purpose="whatsapp_retry", draft_instructions=WA_SYSTEM)
+        if not retry["ok"]:
+            return {"ok": False, "error": retry["error"]}
+        message = wa_extract_message(retry["text"])
+        issues = wa_message_issues(message)
+        if issues:
+            return {"ok": False,
+                    "error": f"Could not write a clean message ({'; '.join(issues)}). Try again."}
     _leads().update_one({"id": body.lead_id}, {"$set": {
         "whatsapp.message": message, "whatsapp.updated_at": _now(),
         "whatsapp.status": wa_state(lead).get("status") or "not_contacted",

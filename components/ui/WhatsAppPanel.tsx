@@ -46,13 +46,18 @@ export default function WhatsAppPanel() {
   const [useDesktop, setUseDesktop] = useState(false);
   useEffect(() => {
     try {
-      const v = localStorage.getItem("wa_use_desktop");
-      if (v !== null) setUseDesktop(v === "1");
+      // v1 of this setting shipped defaulting to the desktop app, and that
+      // choice is still sitting in browsers where it was never wanted — it
+      // silently swallowed every click for anyone using WhatsApp Web. Drop the
+      // old key so the browser default applies once, then respect the new one.
+      localStorage.removeItem("wa_use_desktop");
+      const v = localStorage.getItem("wa_mode_v2");
+      if (v !== null) setUseDesktop(v === "desktop");
     } catch { /* private mode — fall back to the default */ }
   }, []);
   const toggleDesktop = (on: boolean) => {
     setUseDesktop(on);
-    try { localStorage.setItem("wa_use_desktop", on ? "1" : "0"); } catch { /* ignore */ }
+    try { localStorage.setItem("wa_mode_v2", on ? "desktop" : "web"); } catch { /* ignore */ }
   };
   const [openId, setOpenId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
@@ -128,10 +133,13 @@ export default function WhatsAppPanel() {
 
   const openWhatsApp = async (l: WhatsAppLead) => {
     if (useDesktop) {
-      // A custom-scheme link cannot report success, so nothing is checked
-      // here: the OS either hands it to WhatsApp or silently ignores it.
+      // A custom-scheme link cannot report whether the OS handled it, so if
+      // the app is not installed the click appears to do nothing at all. Say
+      // so explicitly, and point at the toggle rather than leaving the user
+      // clicking a dead button.
       window.location.href = desktopLink(l);
-      setMsg("Opening in the WhatsApp app. Press send there, then mark it below.");
+      setMsg("Opening the WhatsApp app… Nothing happened? Untick “Use WhatsApp app” " +
+             "to open in the browser instead.");
       return;
     }
     const url = draft ? linkFor(l) : link;
