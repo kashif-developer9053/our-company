@@ -18,6 +18,9 @@ from urllib.parse import quote
 
 from shared.logger import get_logger
 
+from .languages import label_for as _lang_label
+from .languages import languages_for as _languages_for
+
 log = get_logger("agent3.whatsapp")
 
 # Status values for the WhatsApp pipeline, kept separate from email statuses.
@@ -183,6 +186,9 @@ def serialize(lead: dict) -> dict:
         # yes / no / unknown / "" when never checked. "no" for a landline is
         # decided locally and costs nothing.
         "has_whatsapp": (lead.get("wa_verified") or {}).get("verdict", ""),
+        # Languages worth offering for this lead's country/city, best first.
+        "languages": [{"code": c, "label": _lang_label(c)}
+                      for c in _languages_for(lead.get("country", ""), lead.get("city", ""))],
         "created_at": lead.get("created_at", ""),
     }
 

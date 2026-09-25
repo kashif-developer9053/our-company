@@ -31,6 +31,7 @@ from .email_designer import render_email_html, render_email_lite
 from .engagement import summary as engagement_overview
 from .engagement import sync_engagement
 from .followup import ANGLE_BRIEF as FOLLOWUP_ANGLE_BRIEF
+from .languages import instruction_for as language_instruction
 from .niche_services import audience_for as niche_audience_for
 from .niche_services import services_for as niche_services_for
 from .niche_services import services_line as niche_services_line
@@ -1110,6 +1111,7 @@ async def whatsapp_leads(status: str = "all", only_usable: bool = True, limit: i
         "_id": 0, "id": 1, "business_name": 1, "niche": 1, "city": 1, "phone": 1,
         "whatsapp": 1, "collection_reason": 1, "opportunity_score": 1,
         "created_at": 1, "appears_no_website": 1, "site_audit.findings.code": 1,
+        "country": 1,
         "wa_verified": 1,
     }
     out: list[dict] = []
@@ -1166,7 +1168,8 @@ async def whatsapp_leads(status: str = "all", only_usable: bool = True, limit: i
 
 class WaMessageBody(BaseModel):
     lead_id: str
-    language: str = "english"   # english | roman_urdu
+    # english | roman_urdu | arabic | spanish | french — see agent3/languages.py
+    language: str = "english"
 
 
 class WaVerifyBody(BaseModel):
@@ -1208,17 +1211,14 @@ async def whatsapp_message(body: WaMessageBody):
     # The worked example in WA_SYSTEM is English, and the model kept copying
     # its language along with its shape, so the Roman Urdu instruction has to
     # be emphatic and show the register it means.
-    lang = (
-        "LANGUAGE: write in ROMAN URDU — Urdu typed in English letters, the way Pakistanis "
-        "actually message on WhatsApp. NOT English. The worked example below is in English "
-        "only to show the LENGTH and SHAPE; your output must be Roman Urdu.\n"
-        "Keep product words in English (website, system, software, portal).\n"
-        "Roman Urdu register to match: 'Salam, main Kashif hoon Eldian Core se. Log aap ko "
-        "online search karte hain lekin website nahi milti. Hum website ke sath fees aur "
-        "attendance ka system bhi banate hain. Dikhaun aap ko?'"
-        if body.language == "roman_urdu" else
-        "LANGUAGE: write in simple, clear English."
-    )
+    # Language comes from where the business actually is. Roman Urdu was being
+    # offered for every lead, including clinics in Jubail and Mexico.
+    lang = f"LANGUAGE: {language_instruction(body.language)}"
+    if body.language != "english":
+        # The worked example further down is English; without this the model
+        # copies its language along with its shape.
+        lang += ("\nThe worked example below is in English ONLY to show the LENGTH and "
+                 "SHAPE. Your output must be in the language named above.")
     prompt = (
         f"{lang}\n\n"
         f"INTRODUCE YOURSELF AS: {profile.get('sender_name','')} from "

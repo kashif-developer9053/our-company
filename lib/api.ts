@@ -462,6 +462,8 @@ export interface WhatsAppLead {
   created_at?: string;
   // yes | no | unknown | "" (never checked)
   has_whatsapp?: string;
+  // Languages worth offering, from the lead's country/city. First is local.
+  languages?: { code: string; label: string }[];
   id: string; business_name: string; niche: string; city: string;
   phone_raw: string; number: string; usable: boolean;
   status: "not_contacted" | "message_sent" | "replied" | "interested" | "not_interested" | "invalid_number";
@@ -487,7 +489,7 @@ export const verifyWhatsAppNumbers = (body: { limit?: number; recheck?: boolean 
         credits_remaining?: number | null; message?: string; error?: string }>(
     "/agent3/whatsapp/verify-numbers", { method: "POST", body: JSON.stringify(body) });
 
-export const writeWhatsAppMessage = (lead_id: string, language: "english" | "roman_urdu" = "english") =>
+export const writeWhatsAppMessage = (lead_id: string, language = "english") =>
   req<{ ok: boolean; lead_id?: string; number?: string; message?: string; link?: string; error?: string }>(
     "/agent3/whatsapp/message", { method: "POST", body: JSON.stringify({ lead_id, language }) });
 export const updateWhatsAppLead = (id: string, body: { status?: string; remarks?: string; message?: string }) =>

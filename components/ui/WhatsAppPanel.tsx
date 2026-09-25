@@ -37,11 +37,10 @@ export default function WhatsAppPanel() {
   const [cities, setCities] = useState<api.WaFacet[]>([]);
   const [issues, setIssues] = useState<api.WaFacet[]>([]);
   const [filter, setFilter] = useState<string>("not_contacted");
-  const [lang, setLang] = useState<"english" | "roman_urdu">("english");
   // Language per number: the same list mixes contacts who read English
   // comfortably with those who reply far better in Roman Urdu, so one global
   // setting was the wrong shape.
-  const [rowLang, setRowLang] = useState<Record<string, "english" | "roman_urdu">>({});
+  const [rowLang, setRowLang] = useState<Record<string, string>>({});
   // Desktop app vs browser tab. Remembered, because whichever one works on
   // this machine is the one that works every time.
   // Held across renders so every later click can steer the SAME tab rather
@@ -94,8 +93,10 @@ export default function WhatsAppPanel() {
     return new Date(l.sent_at).toDateString() === new Date().toDateString();
   }).length;
 
-  const prepare = async (l: WhatsAppLead, language?: "english" | "roman_urdu") => {
-    const useLang = language ?? rowLang[l.id] ?? lang;
+  const prepare = async (l: WhatsAppLead, language?: string) => {
+    // Default to the lead's own first (local) language.
+    const useLang = language ?? rowLang[l.id]
+      ?? l.languages?.[0]?.code ?? "english";
     setRowLang((m) => ({ ...m, [l.id]: useLang }));
     setBusy(l.id); setMsg(null); setOpenId(l.id); setDraft(""); setLink("");
     try {
@@ -248,12 +249,6 @@ export default function WhatsAppPanel() {
               onChange={(e) => toggleDesktop(e.target.checked)} />
             <span>Use WhatsApp app</span>
           </label>
-          <span className="muted small">Default language</span>
-          <select className="af-input" style={{ width: 130 }} value={lang}
-            onChange={(e) => setLang(e.target.value as "english" | "roman_urdu")}>
-            <option value="english">English</option>
-            <option value="roman_urdu">Roman Urdu</option>
-          </select>
         </span>
       </div>
 
@@ -353,17 +348,21 @@ export default function WhatsAppPanel() {
                       onBlur={(e) => e.target.value !== l.remarks && saveRemarks(l, e.target.value)} />
                   </td>
                   <td className="row-actions">
+                    {/* Languages come from the lead's own country/city, so a
+                        Jubail clinic offers Arabic and a Mexican one Spanish,
+                        rather than Roman Urdu for everybody. The first is the
+                        local language; English is always available. */}
                     <div className="wa-langbtns">
-                      <button className="btn-mini primary" disabled={busy === l.id}
-                        title="Write this message in English"
-                        onClick={() => prepare(l, "english")}>
-                        {busy === l.id && rowLang[l.id] === "english" ? "…" : "English"}
-                      </button>
-                      <button className="btn-mini" disabled={busy === l.id}
-                        title="Roman Urdu — Urdu written in English letters"
-                        onClick={() => prepare(l, "roman_urdu")}>
-                        {busy === l.id && rowLang[l.id] === "roman_urdu" ? "…" : "Roman Urdu"}
-                      </button>
+                      {(l.languages?.length ? l.languages
+                        : [{ code: "english", label: "English" }]).map((lg, idx) => (
+                        <button key={lg.code}
+                          className={`btn-mini${idx === 0 ? " primary" : ""}`}
+                          disabled={busy === l.id}
+                          title={`Write this message in ${lg.label}`}
+                          onClick={() => prepare(l, lg.code)}>
+                          {busy === l.id && rowLang[l.id] === lg.code ? "…" : lg.label}
+                        </button>
+                      ))}
                     </div>
                   </td>
                 </tr>
