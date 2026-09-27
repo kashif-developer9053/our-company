@@ -21,6 +21,9 @@ from shared.logger import get_logger
 
 from .contact_enrichment import enrich_lead_emails
 from .scraper import scrape_google_maps
+from .service_targets import collection_reason as service_reason
+from .service_targets import is_website_service
+from .service_targets import qualifies as service_qualifies
 from .site_auditor import audit_leads
 from .social_miner import discover_social_businesses
 from .website_miner import mine_business_websites
@@ -179,6 +182,7 @@ async def harvest_leads(
     time_budget: int = _DEFAULT_TIME_BUDGET,
     exclude_keys: set[str] | None = None,
     progress=None,
+    service: str = "website",
 ) -> dict:
     """Search repeatedly until `target` qualified leads are collected.
 
@@ -288,10 +292,17 @@ async def harvest_leads(
                 if (lead.get("email_confidence") or "") == "guessed":
                     rejected["guessed_email_only"] += 1
                 continue
-            if not lead.get("site_audit", {}).get("qualified"):
+            # For website work the audit decides. For CRM/ERP/booking the
+            # audit is the wrong test — a business with a perfect site may
+            # still be running stock on paper — so size decides instead.
+            fits, why_not = service_qualifies(service, lead)
+            if not fits:
                 rejected["good_site"] += 1
                 continue
             lead["contact_verified"] = contact_desc
+            lead["service_target"] = service
+            if not is_website_service(service):
+                lead["collection_reason"] = service_reason(service, lead)
             lead["niche"] = lead.get("niche") or niche
             lead["city"] = lead.get("city") or city
             lead["country"] = lead.get("country") or country
@@ -348,10 +359,14 @@ async def harvest_leads(
                 if not contact_ok:
                     rejected["no_contact"] += 1
                     continue
-                if not lead.get("site_audit", {}).get("qualified"):
+                fits, why_not = service_qualifies(service, lead)
+                if not fits:
                     rejected["good_site"] += 1
                     continue
                 lead["contact_verified"] = contact_desc
+                lead["service_target"] = service
+                if not is_website_service(service):
+                    lead["collection_reason"] = service_reason(service, lead)
                 lead["niche"] = lead.get("niche") or niche
                 lead["city"] = lead.get("city") or city
                 lead["country"] = lead.get("country") or country

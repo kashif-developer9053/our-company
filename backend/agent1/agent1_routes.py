@@ -273,6 +273,10 @@ class HarvestBody(BaseModel):
     # counts leads ALREADY held for the niche, so a second run tops the pile up
     # to `target` instead of trying to find `target` more from scratch.
     continue_niche: bool = False
+    # What we are selling: website | crm | erp | booking | lms | pos.
+    # Anything but "website" changes the qualification test, because a site
+    # audit cannot tell you whether a business needs a CRM.
+    service: str = "website"
 
 
 @router.get("/hunt-status/{run_id}")
@@ -287,6 +291,23 @@ async def hunt_status(run_id: str):
         return {"ok": False, "error": "That hunt is not running — it may have "
                                       "finished before a restart, or already been cleared."}
     return {"ok": True, **run}
+
+
+@router.get("/services")
+@safe_endpoint("agent1")
+async def services():
+    """What we can sell, and which niches buy each one.
+
+    Website work is found by auditing a site. Everything else has to be
+    targeted by industry, because no scan reveals that a business is running
+    its stock on paper.
+    """
+    from .service_targets import SERVICES
+    return {"ok": True, "services": [
+        {"key": k, "label": v["label"], "signal": v["signal"],
+         "niches": v["niches"], "pain": v["pain"]}
+        for k, v in SERVICES.items()
+    ]}
 
 
 @router.get("/niche-performance")
@@ -403,7 +424,7 @@ async def _run_hunt(run_id: str, body: "HarvestBody", target: int, already: int,
     try:
         result = await harvest_leads(
             body.niche, body.city, body.country, target=target, exclude_keys=exclude,
-            progress=progress,
+            progress=progress, service=body.service,
         )
     except Exception as exc:  # noqa: BLE001
         _set_status("error", f"Lead hunt failed: {exc}")

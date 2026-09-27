@@ -506,6 +506,8 @@ export const harvestLeads = (body: {
   // True when continuing on the same niche: the target then counts leads
   // already held, so a second hunt tops the pile up instead of restarting.
   continue_niche?: boolean;
+  // website | crm | erp | booking | lms | pos
+  service?: string;
 }) =>
   req<{
     ok: boolean; batch_id?: string; added?: number; found?: number; target?: number;
@@ -530,6 +532,15 @@ export interface HuntStatus {
 }
 export const getHuntStatus = (runId: string) =>
   req<HuntStatus>(`/agent1/hunt-status/${encodeURIComponent(runId)}`);
+
+// What we are selling decides how a lead is judged. Website work is found by
+// auditing a site; CRM/ERP/booking cannot be — a business with a perfect site
+// may still run its stock on paper — so those are targeted by industry.
+export interface ServiceTarget {
+  key: string; label: string; signal: string; niches: string[]; pain: string;
+}
+export const getServices = () =>
+  req<{ ok: boolean; services: ServiceTarget[] }>("/agent1/services");
 
 export const getNicheProgress = (niche: string, city = "", country = "") =>
   req<{ ok: boolean; niche: string; collected: number; pending_approval: number;

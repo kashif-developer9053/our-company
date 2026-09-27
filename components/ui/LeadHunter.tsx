@@ -28,6 +28,15 @@ export default function LeadHunter({ onDone }: { onDone?: () => void }) {
   // one even if the input box has since been edited.
   const [lastNiche, setLastNiche] = useState("");
   const [live, setLive] = useState("");
+  // What we are selling. Website work is judged by the site audit; everything
+  // else is judged by industry and size, because no scan reveals that a
+  // business is tracking stock on paper.
+  const [service, setService] = useState("website");
+  const [services, setServices] = useState<api.ServiceTarget[]>([]);
+  useEffect(() => {
+    api.getServices().then((r) => setServices(r.services ?? [])).catch(() => {});
+  }, []);
+  const chosen = services.find((s) => s.key === service);
 
   // Agent 1 publishes its progress to the status board while hunting; poll it
   // so a multi-round hunt shows what it is doing instead of a bare spinner.
@@ -58,6 +67,7 @@ export default function LeadHunter({ onDone }: { onDone?: () => void }) {
         country: opts?.country ?? country.trim(),
         target,
         continue_niche: opts?.continueNiche ?? false,
+        service,
       });
       if (!r.ok) { setErr(r.error || "Hunt failed."); return; }
       setLastNiche(n);
@@ -125,6 +135,32 @@ export default function LeadHunter({ onDone }: { onDone?: () => void }) {
         <strong> real contact we actually found</strong> (published email or listed phone — never a guessed
         address) <strong>and</strong> a website with real problems we can fix.
       </p>
+
+      <div className="hunt-service">
+        <label className="build-label">What are you selling?</label>
+        <select className="af-input" value={service} disabled={busy}
+          onChange={(e) => setService(e.target.value)}>
+          {services.map((s) => (
+            <option key={s.key} value={s.key}>{s.label}</option>
+          ))}
+        </select>
+        {chosen && chosen.signal !== "site_defect" && (
+          <p className="hunt-hint">
+            Looks for businesses where <strong>{chosen.pain}</strong> — their website
+            is not the test, so a company with a good site still counts. Big chains
+            are skipped: they already run this software.
+            {chosen.niches.length > 0 && (
+              <>
+                <br />Try a niche like:{" "}
+                {chosen.niches.slice(0, 6).map((n) => (
+                  <button key={n} type="button" className="hunt-nichechip"
+                    onClick={() => setNiche(n)}>{n}</button>
+                ))}
+              </>
+            )}
+          </p>
+        )}
+      </div>
 
       <div className="hunt-form">
         <input className="af-input" placeholder="Niche (e.g. dental clinic)" value={niche}
