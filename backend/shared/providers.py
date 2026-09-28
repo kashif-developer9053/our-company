@@ -45,7 +45,7 @@ PROVIDERS: dict[str, dict] = {
         "base_url": "https://integrate.api.nvidia.com/v1",
         # Verified live against the account: most catalogue entries answer 404
         # or 410 (retired endpoints), so only the one that responded is listed.
-        "models": ["mistralai/mistral-nemotron"],
+        "models": ["nvidia/nemotron-3-ultra-550b-a55b"],
         "needs_base_url": False,
     },
     "agent_router": {
@@ -153,6 +153,14 @@ def _http_error(r):
         detail = str(r.json().get("error", {}))[:160]
     except Exception:  # noqa: BLE001
         detail = r.text[:160]
+    if r.status_code in (404, 410):
+        # The model no longer exists. Providers retire names (OpenAI's gpt-4,
+        # several NVIDIA endpoints) and the body is often an empty {}, so
+        # "Provider error 410: {}" told nobody anything. Named as a model
+        # problem so the fallback is tried and the fix is obvious.
+        return _norm(False, kind="model_gone", error=(
+            "That AI model no longer exists at the provider — it has been retired. "
+            "Pick a current model for this agent in Settings → AI Providers."))
     return _norm(False, error=f"Provider error {r.status_code}: {detail}", kind="unknown")
 
 

@@ -178,7 +178,10 @@ _EMERGENCY_MODELS: tuple[tuple[str, str], ...] = (
     ("gemini", "gemini-flash-lite-latest"),
     ("gemini", "gemini-3.5-flash-lite"),
     ("gemini", "gemini-3-flash-preview"),
-    ("nvidia", "mistralai/mistral-nemotron"),
+    # Verified live; the previous entry (mistralai/mistral-nemotron) was
+    # retired by NVIDIA and answered 410. Deliberately NOT the
+    # "-reasoning" variant, which leaks its planning into the output.
+    ("nvidia", "nvidia/nemotron-3-ultra-550b-a55b"),
 )
 
 
