@@ -133,7 +133,11 @@ async def run_lead_pipeline(record: dict) -> None:
         try:
             _set_agent("agent1", "working", f"Auditing {len(raw)} websites for issues")
             await audit_leads(raw)
-            qualified = [l for l in raw if l.get("site_audit", {}).get("qualified", True)]
+            # Default False, not True. `.get("qualified", True)` let a lead
+            # through whenever the audit had not run or had failed, which is
+            # how businesses whose own audit says "No significant issues
+            # found" ended up in the CRM as web-development prospects.
+            qualified = [l for l in raw if (l.get("site_audit") or {}).get("qualified") is True]
             rejected_good_site = len(raw) - len(qualified)
             raw = qualified
             log.info("Site audit qualified %d leads, dropped %d with good sites",

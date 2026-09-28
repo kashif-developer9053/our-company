@@ -44,17 +44,14 @@ _QUALIFYING_CODES = {
     "no_website",          # nothing to find at all — the strongest pitch
     "site_unreachable",    # the site does not open
     "http_error",          # visitors hit an error page
-    "very_slow",           # people leave before it loads
-    "slow",
-    "not_mobile_friendly", # unusable on the phone most customers use
-    "no_https",            # the browser warns people away
-    "no_contact_route",    # nobody can get in touch
-    "no_contact_form",
-    "outdated_cms",        # a genuine security exposure
-    # Invisible online despite having a site — the owner feels this one too.
-    "no_reviews",
-    "poor_rating",
 }
+
+# Deliberately NOT qualifying, though still recorded in the audit: slow pages,
+# missing contact forms, no HTTPS, an outdated CMS. Each is real work, but
+# none of them is why a business commissions a new website — a directory with
+# a working site and a slow homepage is not a web-development prospect, and
+# pitching one reads as hunting for something to sell. A lead only counts for
+# website work when there is no usable site at all.
 
 # A site scoring at/above this is a genuine opportunity worth contacting.
 QUALIFY_THRESHOLD = 20
