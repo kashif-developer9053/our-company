@@ -1127,7 +1127,13 @@ async def whatsapp_leads(status: str = "all", only_usable: bool = True, limit: i
     # recent 171 were never read at all — a fresh batch of Jubail leads was
     # invisible here while sitting in the CRM. Sorting first means the cap
     # trims the oldest rather than the newest.
-    cursor = (_leads().find({"phone": {"$nin": ["", None]}}, projection)
+    # Rejected leads must never appear here. The desk filtered on having a
+    # phone and nothing else, so 68 leads the CEO had explicitly rejected —
+    # call centres, gyms, a government school — were still being offered for
+    # messaging. Discarded leads are excluded for the same reason.
+    cursor = (_leads().find({"phone": {"$nin": ["", None]},
+                             "status": {"$nin": ["rejected", "undeliverable"]},
+                             "do_not_email": {"$ne": True}}, projection)
               .sort("created_at", -1).limit(1500))
     for lead in cursor:
         item = wa_ser(lead)
