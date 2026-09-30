@@ -135,7 +135,14 @@ def classify(lead: dict) -> tuple[str, str]:
 # we want. So the pattern requires the brand to stand alone or head the name.
 _BIG_BRANDS = (
     r"outfitters?", r"pakistan cricket board", r"\bpcb\b", r"gul ahmed", r"khaadi",
-    r"sapphire (?:textile|retail|mills)", r"nishat (?:mills|linen|group|chunian)",
+    # Retail branches carry only the brand and a suburb ("Sapphire
+    # Gujranwala Satellite Town"), so a qualifier-only pattern missed them.
+    # These brands are large enough that the bare name is safe.
+    r"sapphire(?! \s*(?:tailors?|boutique|fabrics?|cloth|stitch))",
+    r"nishat (?:mills|linen|group|chunian)",
+    r"j\. ?dot", r"junaid jamshed", r"\bsana safinaz\b", r"\bgul ahmed\b",
+    r"\bbreakout\b", r"\balkaram\b", r"\bmaria b\b", r"\bbonanza\b",
+    r"\bstylo\b", r"\bborjan\b", r"\becs\b", r"\bhush puppies\b",
     r"bata", r"servis (?:industries|shoes)", r"unilever", r"nestl[eé]", r"telenor",
     r"jazz(?:\s|$)", r"ufone", r"zong", r"habib bank", r"\bhbl\b", r"\bubl\b", r"\bmcb\b",
     r"meezan bank", r"allied bank", r"askari bank", r"standard chartered", r"faysal bank",
