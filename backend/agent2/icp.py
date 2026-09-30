@@ -31,7 +31,11 @@ COMPETITOR_PATTERNS = [
     r"\bsoftware\b", r"\bweb\s*(design|development|solutions?)\b",
     r"\bapp\s*(development|developers?)\b", r"\bdigital\s*(agency|marketing)\b",
     r"\bit\s*(solutions?|services?|company|consult)", r"\binfotech\b",
-    r"\btechnolog(y|ies)\b", r"\bsystems?\s*(ltd|inc|pvt)", r"\bsolutions?\s*(pvt|ltd|inc)\b",
+    r"\btechnolog(y|ies)\b", r"\bsystems?\s*(ltd|inc|pvt)",
+    # "Solutions (Pvt) Ltd" is a generic Pakistani company suffix, not an
+    # IT signal: it rejected Bin Hashim Packaging Solution Pvt Ltd, a
+    # packaging firm. Only count it next to a technology word.
+    r"\b(?:soft|tech|web|digital|data|cyber|cloud|net|info|smart|e-)\w*\s+solutions?\b|\b(?:soft|tech|web|cyber|cloud|info)solutions?\b",
     r"\bdevelopers?\b", r"\bwebsite\b", r"\bhosting\b", r"\bseo\b",
     r"\bsofthouse\b", r"\bsoft\s*house\b", r"\bcoding\b", r"\bprogramm(er|ing)\b",
 ]
@@ -236,8 +240,52 @@ _BUSINESS_MARKER = re.compile(
     r"ltd|pvt|llc|inc|plc|corp\w*|consult\w*|agency|bureau|office|house|"
     r"point|hub|zone|care|health|surgery|practice|firm|chambers|"
     r"furnitures?|furnishers?|interiors?|d[eé]cor|electronics|hardware|"
-    r"textiles?|garments?|wood|bed|beds|sons|brothers)\b"
-    r"|مجمع|عيادة|مركز|مستشفى|صيدلية|شركة|مؤسسة|مكتب",
+    r"textiles?|garments?|wood|bed|beds|sons|brothers|"
+    # Trades that were missing entirely, each taken from a real lead the
+    # gate rejected: Classic Barbershop, Superior Cut, Sehar Collection,
+    # Probox Packaging, Furst Woodworks, Sajid Autos, Lahore Spices.
+    r"barbers?|barbershops?|cuts?|saloon|parlou?r|"
+    r"collections?|boutique|fabrics?|cloth|tailors?|stitch\w*|"
+    r"packag\w*|packers?|printing|printers?|advertiser?s?|graphics?|"
+    r"woodworks?|carpent\w*|joiner\w*|upholster\w*|"
+    r"autos?|motorcycles?|tyres?|spare ?parts?|"
+    r"shirts?|apparel|wear|outfits?|"
+    r"spices?|foods?|sweets?|juice|dhaba|caterers?|"
+    r"crafts?|designs?|prints?|arts?|gallery|"
+    r"medics?|surger\w*|diagnostics?|physio\w*|"
+    r"solar|electric\w*|plumb\w*|repair\w*|rent\w*|"
+    r"mall|plaza|arcade|emporium|depot|warehouse|godown)\b"
+    r"|مجمع|عيادة|مركز|مستشفى|صيدلية|شركة|مؤسسة|مكتب"
+    # Urdu trade words. Businesses writing their own name in Urdu were being
+    # rejected as private individuals — پاکستان فرنیچرز is a furniture shop.
+    r"|فرنیچر|فرنیچرز|سٹور|دکان|مارکیٹ|ہسپتال|کلینک|سکول|"
+    r"کمپنی|ادارہ|دفتر|ورکشاپ|فیکٹری|میڈیکل|بیکری|ہوٹل",
+    re.I)
+
+
+# What a private individual's Maps pin actually looks like. The rule used to be
+# "no recognised trade word", which rejected Custom Ink, Wooden Assets and Hair
+# Stable — real shops whose names simply describe nothing. The person who rang
+# to ask how we got his number was listed as "AboRakan": a personal name, an
+# honorific, or a social handle. That is the pattern worth blocking, and it is
+# narrow enough to be safe.
+_PERSONAL_SHAPE = re.compile(
+    r"^@"                                     # a social handle: @mehr1001_n
+    # Honorifics. Matched with a following separator OR a capital letter,
+    # because the man who rang us was listed as "AboRakan" with no space:
+    # requiring one let exactly the case this rule exists for through.
+    r"|^(?:dr|mr|mrs|ms|miss|prof|eng|engr|malik|mian|syed|hafiz|qari|"
+    r"maulana|sheikh|shaikh|haji|alhaj|abu|abo|umm)"
+    # A separator, or a capital that starts the next word: "AboRakan" is
+    # the man who rang to ask how we got his number.
+    #
+    # (?-i:...) turns case-insensitivity OFF for the lookahead. Under
+    # re.I a plain [A-Z] also matches lowercase, so "Abo" matched the
+    # "u" of "About Time" — a barbershop — and blocked it.
+    r"(?:\b[\s.]|(?-i:(?=[A-Z])))"
+    # "Bin" and "Ibn" start plenty of trading names (Bin Hashim Packaging),
+    # so they only count when nothing else follows but another single word.
+    r"|^(?:bin|ibn)\s+\w+$",
     re.I)
 
 
@@ -251,14 +299,33 @@ def _looks_personal(lead: dict) -> bool:
     name = str(lead.get("business_name") or "").strip()
     if not name or len(name.split()) > 2:
         return False
-    if _BUSINESS_MARKER.search(name):
+    # "SubhanInteriors" and "HomeDeco" are one token to split() but two words
+    # to a reader, and the marker never fired because the trade word is glued
+    # to the one before it. Split the camel case before testing.
+    spaced = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", name)
+    if _BUSINESS_MARKER.search(spaced):
         return False
     if (lead.get("website") or "").strip() or (lead.get("email") or "").strip():
         return False
     # A rating or reviews means Google has it as a real, visited place.
     if lead.get("reviews_count") or lead.get("rating"):
         return False
-    return True
+    # A trade name we do not recognise is still a trade. "Custom Ink",
+    # "Hair Stable" and "Wooden Assets" carry no marker word, but Google
+    # returned them under a trade search and they have a street address —
+    # a private individual's Maps pin does not. Keeping the word list as the
+    # only test rejected 47 real businesses, several of them simply for
+    # writing their name in Urdu.
+    # The scraper reads the category straight off the Maps card ("Barber shop",
+    # "Furniture store"). The verifier stores it as `notes`. A private person's
+    # pin has no category, so its presence is the strongest evidence available
+    # that Google itself files this as a business.
+    if (lead.get("category") or lead.get("notes") or "").strip():
+        return False
+    # Nothing left to go on but the shape of the name itself. A name that
+    # describes nothing is still usually a shop ("Wooden Assets", "Hair
+    # Stable"); a name carrying an honorific or a handle is a person.
+    return bool(_PERSONAL_SHAPE.search(name))
 
 
 def _already_well_served(lead: dict) -> tuple[bool, str]:
