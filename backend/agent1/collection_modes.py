@@ -75,6 +75,19 @@ _BRANCH_MARKER = re.compile(
 _CHAIN_THRESHOLD = 3
 
 
+# Suburb and area words that trail a branch name. Stripped before comparing,
+# so "Gourmet Bakers Model Town" and "Gourmet Bakers Gulberg" are seen as one
+# chain, while "Al Noor Tailors" keeps the trade word that makes it distinct.
+_AREA_WORDS = {
+    "town", "city", "road", "rd", "chowk", "colony", "block", "phase",
+    "scheme", "market", "bazar", "bazaar", "plaza", "mall", "centre", "center",
+    "gulberg", "dha", "cantt", "cantonment", "saddar", "model", "johar",
+    "north", "south", "east", "west", "main", "new", "old", "branch",
+    "lahore", "karachi", "islamabad", "rawalpindi", "faisalabad", "multan",
+    "peshawar", "quetta", "sialkot", "gujranwala", "hyderabad", "sargodha",
+}
+
+
 def resolve(mode: str, niche: str, service: str) -> str:
     """Normalise what the UI sent into one of MODES.
 
@@ -145,12 +158,23 @@ def drop_chains(leads: list[dict]) -> tuple[list[dict], int]:
     seen across the whole result, which is why it is not in is_small_business.
     """
     def key(l: dict) -> str:
+        """The part of a name that a chain repeats.
+
+        Keying on the first two words merged businesses that merely share a
+        common prefix: "Al Noor Furniture", "Al Noor Medical Store" and "Al
+        Noor Tailors" are three unrelated shops, and every second shopfront
+        here is an Al Noor or a Bismillah. A chain repeats its trading name
+        AND its trade, so the branch/area words are stripped from the end and
+        what remains must match in full.
+        """
         n = str(l.get("business_name") or "").strip().lower()
-        # Strip the branch/area suffix so "Gourmet Bakers Model Town" and
-        # "Gourmet Bakers DHA" collapse to the same name.
         n = _BRANCH_MARKER.sub(" ", n)
-        parts = n.split()
-        return " ".join(parts[:2]) if len(parts) > 2 else n
+        parts = [p for p in re.split(r"[^\w]+", n) if p]
+        # Drop a trailing place name: "gourmet bakers model town" -> the chain
+        # is "gourmet bakers", but "al noor tailors" keeps its trade word.
+        while len(parts) > 2 and parts[-1] in _AREA_WORDS:
+            parts.pop()
+        return " ".join(parts)
 
     counts = Counter(key(l) for l in leads if l.get("business_name"))
     chains = {k for k, c in counts.items() if c >= _CHAIN_THRESHOLD}
