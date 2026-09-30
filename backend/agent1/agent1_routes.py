@@ -458,7 +458,7 @@ async def _hunt_across_niches(body: "HarvestBody", target: int, where: str,
         if len(leads) >= target:
             break
         remaining = target - len(leads)
-        if mode != "niche":
+        if mode != "niche" and niche:
             progress(f"[{i}/{len(niches)}] {niche} — {len(leads)}/{target} so far")
         try:
             res = await harvest_leads(
@@ -499,9 +499,14 @@ async def _hunt_across_niches(body: "HarvestBody", target: int, where: str,
                 continue
             if key:
                 seen.add(key)
-            lead.setdefault("niche", niche)
+            # A sweep has no niche to stamp; the scraper's own category is
+            # what the business actually is, so keep that instead of blank.
+            if niche:
+                lead.setdefault("niche", niche)
+            elif lead.get("category"):
+                lead.setdefault("niche", str(lead["category"])[:60])
             leads.append(lead)
-        if fresh:
+        if fresh and niche:
             searched.append(niche)
 
     if mode == "area":

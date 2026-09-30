@@ -41,23 +41,6 @@ log = get_logger("agent1.modes")
 
 MODES = ("niche", "purpose", "area")
 
-# Trades worth sweeping in a town, ordered by how often they turn out to need
-# something. Deliberately ordinary: these are the businesses on any main road,
-# and the ones least likely to already have a system.
-AREA_NICHES: tuple[str, ...] = (
-    "furniture shops", "clothing shops", "mobile phone shops", "electronics shops",
-    "hardware stores", "auto workshops", "car dealers", "beauty salons",
-    "barber shops", "gyms", "dental clinics", "private clinics", "pharmacies",
-    "opticians", "diagnostic labs", "private schools", "tuition academies",
-    "driving schools", "restaurants", "bakeries", "sweet shops", "caterers",
-    "marriage halls", "photographers", "printing press", "advertising agencies",
-    "interior designers", "property dealers", "travel agencies", "courier services",
-    "packers and movers", "tailors", "boutiques", "shoe shops", "jewellers",
-    "grocery stores", "general stores", "solar installers", "plumbers",
-    "electricians", "construction material suppliers", "tile shops", "paint shops",
-    "computer shops", "book shops", "toy shops", "pet shops", "florists",
-    "laundry and dry cleaners", "water filtration suppliers",
-)
 
 # A sweep returns whatever is on the road, so it needs the size window the
 # niche modes get from the service definition. Below the floor there is nothing
@@ -116,11 +99,16 @@ def plan(mode: str, niche: str, service: str, target: int) -> list[str]:
         # The service's own niche list, which is the whole point of the mode:
         # these are the business types that inherently run on the thing we are
         # selling. A website hunt has no such list — anyone can need a website
-        # — so it falls back to the area sweep's ordinary trades.
+        # — so it sweeps the area instead of inventing trades.
         wanted = niches_for(service)
-        return list(wanted) if wanted else list(AREA_NICHES)
+        return list(wanted) if wanted else [""]
 
-    return list(AREA_NICHES)
+    # An area sweep searches the PLACE, not a list of trades. One empty entry
+    # means one harvest with no niche, which asks Maps "what is in this town"
+    # and takes back whatever mix it returns. Walking a list of trades here was
+    # a niche hunt in disguise — searching furniture in Sialkot, then clothing
+    # in Sialkot — which is exactly what the mode exists to avoid.
+    return [""]
 
 
 def is_small_business(lead: dict) -> tuple[bool, str]:
@@ -193,6 +181,9 @@ def describe(mode: str, niche: str, service: str, where: str) -> str:
     if mode == "niche":
         return f"{niche} in {where}"
     if mode == "purpose":
-        n = len(plan(mode, niche, service, 0))
-        return f"anyone in {where} who needs {label.lower()} — searching {n} business types"
-    return f"small businesses across {where} — sweeping {len(AREA_NICHES)} trades"
+        n = len([x for x in plan(mode, niche, service, 0) if x])
+        if n:
+            return (f"anyone in {where} who needs {label.lower()} — "
+                    f"searching {n} business types")
+        return f"anyone in {where} who needs {label.lower()}"
+    return f"every kind of small business in {where}"

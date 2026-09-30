@@ -163,7 +163,7 @@ export default function LeadHunter({ onDone }: { onDone?: () => void }) {
             { k: "purpose", t: "I know what I'm selling",
               d: "Name only the service. Agent 1 walks the business types that run on it." },
             { k: "area", t: "Just find me small businesses",
-              d: "Sweep a town's ordinary trades and let the diagnosis decide what each needs." },
+              d: "Name only a place. Agent 1 asks what is there — every trade, mixed — and works out what each one needs." },
           ] as const).map((m) => (
             <button key={m.k} type="button" disabled={busy}
               className={`hunt-mode ${mode === m.k ? "on" : ""}`}
@@ -187,9 +187,11 @@ export default function LeadHunter({ onDone }: { onDone?: () => void }) {
         )}
         {mode === "area" && (
           <p className="hunt-hint">
-            No service to pick: a sweep looks at whatever is there and works out what
-            each business needs — a website for one, stock tracking for the next.
-            Chains and branches are skipped, so what comes back is owner-run shops.
+            No niche and no service: Agent 1 searches the place itself — main bazar,
+            commercial area, industrial estate — and takes back whatever mix of trades
+            is there, working out what each one needs. A website for the shop with none,
+            stock tracking for the manufacturer. Chains, branches and anything too big
+            are skipped, so what comes back is owner-run businesses.
           </p>
         )}
         {mode === "purpose" && chosen && chosen.niches.length > 0 && (

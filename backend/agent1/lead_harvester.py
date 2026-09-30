@@ -33,10 +33,46 @@ log = get_logger("agent1.harvester")
 
 
 
+
+def _swept_niche(lead: dict, query: str = "") -> str:
+    """What trade a swept business is, when no niche was searched for.
+
+    A sweep asks about a place, so nothing names the trade. Maps puts it on
+    the list card ("Solar energy company", "Furniture store") and the scraper
+    already reads it — but that field also catches opening hours and phone
+    numbers when the card shows no category, so anything of that shape is
+    discarded rather than stored as a trade.
+    """
+    cat = str(lead.get("category") or "").strip()
+    if not cat:
+        return ""
+    low = cat.lower()
+    if any(x in low for x in ("open", "closes", "closed", "24 hours", "+", "·")):
+        return ""
+    if len(cat) > 60 or cat == (lead.get("business_name") or "").strip():
+        return ""
+    # The web crawler stores the SEARCH that found a business in `category`
+    # (website_miner.py), so on a sweep that field reads "businesses in
+    # Sialkot, Pakistan" — the query, not a trade. Maps is the only source
+    # that puts a real category there.
+    if query and cat.strip().lower() == query.strip().lower():
+        return ""
+    return cat
+
 def _qualifies(service: str, lead: dict, sweep: bool) -> tuple[bool, str]:
     """Is this lead worth keeping, given what the hunt is looking for?"""
     if not sweep:
         return service_qualifies(service, lead)
+
+    # A niche hunt asks for one trade, so what comes back is roughly right.
+    # A sweep asks a whole town and gets software houses, chain branches and
+    # government offices mixed in with the shops. Agent 2 would reject those
+    # later anyway, so checking here only saves the audit — but it also keeps
+    # the sweep's own count honest about what it actually found.
+    from agent2.icp import classify
+    verdict, why = classify(lead)
+    if verdict != "keep":
+        return False, why
     # An area sweep has no service to test against. The honest question is
     # whether the diagnosis found anything we could sell them — if it did not,
     # there is no message to write and the lead is worthless.
@@ -69,6 +105,54 @@ def _stamp_purpose(lead: dict, service: str) -> None:
         lead["collection_reason"] = reason
 
 # Query shapes that surface different businesses for the same niche.
+# An AREA SWEEP names no trade at all. The CEO asked for "a location, and all
+# the niches there" — not furniture in Sialkot, then clothing in Sialkot, which
+# is just a niche hunt wearing a hat.
+#
+# Maps answers a location-only query with whatever it has, mixed: on "businesses
+# in Sialkot" it returned sports manufacturers, trading companies and
+# enterprises together. The wording matters more than it looks. "shops in X"
+# comes back full of shopping malls and Outfitters branches, and a bare "X"
+# returns nothing at all, so both are avoided.
+#
+# The variety comes from asking the same place in different ways, and from
+# naming the commercial districts where the small businesses actually are.
+_AREA_TEMPLATES = (
+    "businesses in {where}",
+    "companies in {where}",
+    "small businesses in {where}",
+    "local business {where}",
+    "family business {where}",
+    "traders in {where}",
+    "manufacturers in {where}",
+    "suppliers in {where}",
+    "services in {where}",
+    "enterprises in {where}",
+    # Proximity is how Maps ranks, so naming the commercial areas of a town
+    # surfaces the businesses a centre-weighted search never reaches. This is
+    # where the ordinary main-road shops come from.
+    "businesses main road {where}",
+    "businesses main bazar {where}",
+    "shops main market {where}",
+    "businesses commercial area {where}",
+    "businesses industrial area {where}",
+    "businesses town centre {where}",
+    "businesses cantt {where}",
+    "businesses saddar {where}",
+    "businesses model town {where}",
+    "businesses satellite town {where}",
+    "businesses civil lines {where}",
+    "businesses college road {where}",
+    "businesses station road {where}",
+    "businesses gt road {where}",
+    "businesses near {where} bus stand",
+    "trading company {where}",
+    "industries in {where}",
+    "workshop {where}",
+    "store {where} contact number",
+    "office {where} phone number",
+)
+
 _QUERY_TEMPLATES = (
     "{niche} in {where}",
     "{niche} {where} contact",
@@ -139,6 +223,15 @@ _WIDEN_TEMPLATES = (
     "best {niche} {country}",
     "{niche} services near {where}",
     "{niche} in {country} contact",
+)
+# Widening a sweep means the surrounding towns, not a broader trade. With an
+# empty niche the templates above would render as " near Sialkot".
+_AREA_WIDEN_TEMPLATES = (
+    "businesses near {where}",
+    "businesses in {country}",
+    "small businesses {country}",
+    "traders near {where}",
+    "manufacturers in {country}",
 )
 _AUDIT_CONCURRENCY = 12      # sites audited in parallel (each is a light HTTP GET)
 
@@ -252,7 +345,9 @@ async def harvest_leads(
             except Exception:  # noqa: BLE001
                 pass
 
-    for template in _QUERY_TEMPLATES:
+    # A sweep asks about the PLACE; a niche hunt asks about the trade.
+    templates = _AREA_TEMPLATES if sweep else _QUERY_TEMPLATES
+    for template in templates:
         if len(qualified) >= target:
             break
         if time.perf_counter() - started > time_budget:
@@ -271,21 +366,34 @@ async def harvest_leads(
                 fresh.extend(maps.get("leads", []))
         except Exception as exc:  # noqa: BLE001 - one source failing is survivable
             log.error("Maps round failed (isolated): %s", exc)
-        # 2) Our own web crawler (good for published emails)
-        try:
-            mined = await mine_business_websites(query, max_results=_PER_ROUND)
-            if mined.get("ok"):
-                fresh.extend(mined.get("leads", []))
-        except Exception as exc:  # noqa: BLE001
-            log.error("Web mining round failed (isolated): %s", exc)
+        # 2) Our own web crawler (good for published emails).
+        #
+        #    A sweep skips it. Maps answers a location query with ~12 results
+        #    that carry a category and a review count; the crawler answers the
+        #    same query from search results, with neither. On a sweep that
+        #    matters: the size filter and the chain filter both need those
+        #    numbers, and without them a sweep of Sialkot came back with eight
+        #    businesses of unknown size, no trade, and mostly the weakest
+        #    pitch we have. There are 30 area queries to work through instead,
+        #    each returning real Maps data.
+        if not sweep:
+            try:
+                mined = await mine_business_websites(query, max_results=_PER_ROUND)
+                if mined.get("ok"):
+                    fresh.extend(mined.get("leads", []))
+            except Exception as exc:  # noqa: BLE001
+                log.error("Web mining round failed (isolated): %s", exc)
         # 3) Businesses that exist only on Facebook/Instagram. Maps and the web
         #    crawler both assume a website, so these were invisible — yet "no
         #    website at all" is the strongest pitch we have. Run once per hunt
         #    rather than per round: the queries do not vary by template and the
         #    engines throttle quickly.
-        if rounds_run == 1:
+        # A sweep has no trade to search social for, and "business in Sialkot"
+        # on Facebook returns pages, not businesses.
+        if rounds_run == 1 and not sweep:
             try:
-                social = await discover_social_businesses(niche, where, max_results=_PER_ROUND)
+                social = await discover_social_businesses(
+                    niche, where, max_results=_PER_ROUND)
                 if social.get("ok") and social.get("leads"):
                     fresh.extend(social["leads"])
                     say(f"Social search added {len(social['leads'])} businesses with no website.")
@@ -351,7 +459,7 @@ async def harvest_leads(
                 continue
             lead["contact_verified"] = contact_desc
             _stamp_purpose(lead, service)
-            lead["niche"] = lead.get("niche") or niche
+            lead["niche"] = lead.get("niche") or niche or _swept_niche(lead, query)
             lead["city"] = lead.get("city") or city
             lead["country"] = lead.get("country") or country
             qualified[key] = lead
@@ -369,7 +477,7 @@ async def harvest_leads(
             and city
             and time.perf_counter() - started < time_budget * 0.75):
         say(f"Only {len(qualified)} found in {where} — widening to the surrounding area.")
-        for template in _WIDEN_TEMPLATES:
+        for template in (_AREA_WIDEN_TEMPLATES if sweep else _WIDEN_TEMPLATES):
             if len(qualified) >= target or time.perf_counter() - started > time_budget:
                 break
             rounds_run += 1
@@ -383,9 +491,10 @@ async def harvest_leads(
             except Exception as exc:  # noqa: BLE001
                 log.error("Widened maps round failed (isolated): %s", exc)
             try:
-                wres = await mine_business_websites(query, max_results=_PER_ROUND)
-                if wres.get("ok"):
-                    wider.extend(wres.get("leads", []))
+                if not sweep:
+                    wres = await mine_business_websites(query, max_results=_PER_ROUND)
+                    if wres.get("ok"):
+                        wider.extend(wres.get("leads", []))
             except Exception as exc:  # noqa: BLE001
                 log.error("Widened mining round failed (isolated): %s", exc)
 
@@ -414,7 +523,7 @@ async def harvest_leads(
                     continue
                 lead["contact_verified"] = contact_desc
                 _stamp_purpose(lead, service)
-                lead["niche"] = lead.get("niche") or niche
+                lead["niche"] = lead.get("niche") or niche or _swept_niche(lead, query)
                 lead["city"] = lead.get("city") or city
                 lead["country"] = lead.get("country") or country
                 qualified[key] = lead

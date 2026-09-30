@@ -48,6 +48,14 @@ BLOCKED_PATTERNS = [
     r"\byelp\b", r"\byellow\s*pages\b", r"\bjustdial\b", r"\bindiamart\b",
     r"\bscribd\b", r"\bcourse\s*hero\b",   # directories/scrapers that leaked in before
     r"\btest\s*compan", r"^test\b", r"\bexample\b", r"\blorem\b",
+    # Trade bodies, associations and chambers. A sweep of a city centre turns
+    # these up because they are registered businesses with a phone number, but
+    # they are membership organisations: no customers to win, no owner to sell
+    # to, and a committee instead of a decision.
+    r"chamber of commerce", r"\btrade (?:association|body|union)\b",
+    r"\bassociation of\b", r"\bwelfare (?:society|trust|foundation)\b",
+    r"\bcharitable trust\b", r"\bbar association\b",
+    r"\bmerchants? association\b", r"\banjuman\b", r"\btraders union\b",
 ]
 _BLOCKED_RE = re.compile("|".join(BLOCKED_PATTERNS), re.I)
 
