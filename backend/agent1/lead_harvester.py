@@ -20,8 +20,9 @@ from datetime import datetime, timezone
 from shared.logger import get_logger
 
 from .contact_enrichment import enrich_lead_emails
+from .purposes import diagnose as diagnose_purposes
+from .purposes import reason_line as purpose_reason
 from .scraper import scrape_google_maps
-from .service_targets import collection_reason as service_reason
 from .service_targets import is_website_service
 from .service_targets import qualifies as service_qualifies
 from .site_auditor import audit_leads
@@ -29,6 +30,31 @@ from .social_miner import discover_social_businesses
 from .website_miner import mine_business_websites
 
 log = get_logger("agent1.harvester")
+
+
+def _stamp_purpose(lead: dict, service: str) -> None:
+    """Record WHY this lead was collected, so outreach can pitch the right thing.
+
+    Every lead carries `purposes` — an ordered list of what we could honestly
+    sell them, strongest first — and a plain-English `collection_reason` built
+    from it. The outreach writers read `purposes`; nothing downstream has to
+    re-derive the diagnosis from the audit, which is how messages about H1 tags
+    used to reach businesses collected for CRM work.
+
+    The service being hunted is passed as a bias, not a verdict: if it applies
+    at all it leads the pitch, but a lead that only fits something else still
+    gets pitched the thing that actually fits.
+    """
+    lead["service_target"] = service
+    purposes = diagnose_purposes(lead, wanted=service)
+    lead["purposes"] = purposes
+    reason = purpose_reason(purposes, lead)
+    # A website lead keeps the auditor's own summary, which names the actual
+    # fault; for everything else the auditor has nothing useful to say.
+    if is_website_service(service) and (lead.get("site_audit") or {}).get("summary"):
+        lead["collection_reason"] = lead["site_audit"]["summary"]
+    elif reason:
+        lead["collection_reason"] = reason
 
 # Query shapes that surface different businesses for the same niche.
 _QUERY_TEMPLATES = (
@@ -300,9 +326,7 @@ async def harvest_leads(
                 rejected["good_site"] += 1
                 continue
             lead["contact_verified"] = contact_desc
-            lead["service_target"] = service
-            if not is_website_service(service):
-                lead["collection_reason"] = service_reason(service, lead)
+            _stamp_purpose(lead, service)
             lead["niche"] = lead.get("niche") or niche
             lead["city"] = lead.get("city") or city
             lead["country"] = lead.get("country") or country
@@ -364,9 +388,7 @@ async def harvest_leads(
                     rejected["good_site"] += 1
                     continue
                 lead["contact_verified"] = contact_desc
-                lead["service_target"] = service
-                if not is_website_service(service):
-                    lead["collection_reason"] = service_reason(service, lead)
+                _stamp_purpose(lead, service)
                 lead["niche"] = lead.get("niche") or niche
                 lead["city"] = lead.get("city") or city
                 lead["country"] = lead.get("country") or country

@@ -67,6 +67,8 @@ def serialize(doc: dict) -> dict:
         "discovery_source": doc.get("discovery_source", ""),
         # Why this lead was collected + the evidence behind it.
         "collection_reason": doc.get("collection_reason", ""),
+        "purposes": doc.get("purposes", []),
+        "service_target": doc.get("service_target", ""),
         "opportunity_score": doc.get("opportunity_score", 0),
         "site_audit": doc.get("site_audit", {}),
         "pitch_points": doc.get("pitch_points", []),

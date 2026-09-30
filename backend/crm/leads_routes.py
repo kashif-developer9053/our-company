@@ -43,6 +43,8 @@ def add_leads(rows: list[dict], source: str = "agent1", last_action: str = "Adde
     allowed = {"business_name", "niche", "country", "city", "phone", "email", "website", "status", "notes",
                # evidence for WHY this lead was collected (see agent1/site_auditor.py)
                "collection_reason", "opportunity_score", "site_audit", "pitch_points", "discovery_source",
+               # what we can sell them — drives the outreach pitch (see agent1/purposes.py)
+               "purposes", "service_target",
                # approval-gate + contact provenance (batch_id is what the CEO approves against)
                "batch_id", "email_confidence", "email_source_url", "contact_verified", "has_working_website"}
     for row in rows:

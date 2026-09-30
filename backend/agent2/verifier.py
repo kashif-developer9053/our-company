@@ -210,6 +210,11 @@ def verify_and_store(raw_leads: list[dict], niche: str, country: str, city: str,
                 "notes": raw.get("category", ""),
                 # WHY this lead was collected — evidence-based, from the site audit.
                 "collection_reason": raw.get("collection_reason", ""),
+                # What we can actually sell them, strongest first. This is what
+                # the email and WhatsApp writers pitch on, so it must survive
+                # verification rather than being re-guessed downstream.
+                "purposes": raw.get("purposes", []),
+                "service_target": raw.get("service_target", ""),
                 "opportunity_score": raw.get("opportunity_score", 0),
                 # Size/standing signals from the Maps card — the only measure
                 # we have of whether a business already has help.

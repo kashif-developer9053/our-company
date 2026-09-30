@@ -26,6 +26,9 @@ from shared.logger import get_logger
 from shared.safe_wrapper import safe_endpoint
 from shared.settings_store import get_config, get_icp
 
+from agent1.purposes import brief as purpose_brief
+from agent1.purposes import diagnose as diagnose_purposes
+
 from .chat_commands import parse as parse_chat_command
 from .email_designer import render_email_html, render_email_lite
 from .engagement import summary as engagement_overview
@@ -323,8 +326,16 @@ async def _write_email(lead: dict, followup_angle: str = "",
     identity = company_profile.outreach_identity()
     # A follow-up has its own brief; the first-touch angle would restate the
     # pitch they have already ignored once.
-    angle = (FOLLOWUP_ANGLE_BRIEF.get(followup_angle) or _angle_for(lead)
-             if followup_angle else _angle_for(lead))
+    #
+    # For a first touch the angle comes from WHY the lead was collected. The
+    # old angle was built from the site audit alone, so a business collected
+    # for stock or enquiry work was still opened with a complaint about its
+    # website — wrong, and obviously untargeted to the reader.
+    purposes = lead.get("purposes") or diagnose_purposes(lead)
+    if followup_angle:
+        angle = FOLLOWUP_ANGLE_BRIEF.get(followup_angle) or _angle_for(lead)
+    else:
+        angle = purpose_brief(purposes, lead) or _angle_for(lead)
     if extra_services:
         # Named by the CEO for this batch, so it outranks the generic service
         # list: they know why this niche in particular would want these.
@@ -341,9 +352,14 @@ async def _write_email(lead: dict, followup_angle: str = "",
         # generic service list reads as a brochure — a school needs to hear
         # "attendance and results", not "ERP solutions".
         systems = niche_services_line(lead.get("niche", ""), limit=3)
+        # "alongside the website" is only true when the website IS the pitch.
+        # Said to a business with a perfectly good site it reads as a form
+        # letter, which is exactly what we are trying not to send.
+        alongside = ("alongside the website we build "
+                     if purposes[:1] == ["website"] else "we also build ")
         if systems:
-            angle += (f"\nALSO work in, as ONE natural sentence near the end, that alongside the "
-                      f"website we build {systems}. Address the reader directly as 'you', use "
+            angle += (f"\nALSO work in, as ONE natural sentence near the end, that {alongside}"
+                      f"{systems}. Address the reader directly as 'you', use "
                       f"their industry's plain vocabulary, and never list these as bullets.")
     avoid = _recent_openings()
     # Rotate the opening structure per lead so a batch never uses one formula.
@@ -1057,39 +1073,57 @@ async def edit_draft(draft_id: str, body: EditDraftBody):
 
 # ---- WhatsApp outreach (click-to-send, never automated) --------------------
 WA_SYSTEM = (
-    "You write WhatsApp messages for an IT company contacting a local business owner in Pakistan.\n\n"
+    "You write WhatsApp messages for an IT company contacting a local business owner.\n\n"
     "LENGTH IS THE MOST IMPORTANT RULE: 35 to 55 words, maximum 4 short lines. A business owner "
     "reads this on a phone between customers. Anything longer is scrolled past and never "
-    "answered. Every sentence must earn its place — cut any word that is not doing work.\n\n"
-    "THE SHAPE — four beats, one line each:\n"
+    "answered. Every sentence must earn its place \u2014 cut any word that is not doing work.\n\n"
+    "THE SHAPE \u2014 four beats, one line each:\n"
     "1. Greeting plus who you are: 'Salam, I'm <name> from <company>.'\n"
-    "2. What you noticed, in plain words: 'people search for <business> and find no website'.\n"
-    "3. What you can do, naming ONE or TWO systems that fit their trade: 'we build sites plus "
-    "attendance and fee systems for schools'.\n"
-    "4. One short question that invites a CONVERSATION, not a demo: 'Can we discuss "
-    "this?', 'Worth a quick chat?', 'Shall we talk about it?'. Asking to show them "
-    "something is a commitment they have to agree to; asking to talk is just a reply.\n\n"
+    "2. THE HOOK. One specific, checkable fact about THEIR business, taken from the brief \u2014 "
+    "their rating, their review count, that their site does not open, that they have none. "
+    "This is the whole message. An owner gets ten messages a day that could have been sent to "
+    "anyone; the one that proves somebody actually looked at his business is the one he reads. "
+    "Never open with what you sell.\n"
+    "3. What that costs them, or what changes if it is fixed \u2014 in their own words, never a "
+    "feature name.\n"
+    "4. THE QUESTION from the brief, or a close variant. It must be something only they can "
+    "answer about their own business ('how are patients booking at the moment?'). "
+    "'Can we discuss this?' and 'Worth a quick chat?' ask them to commit to a meeting with a "
+    "stranger, which is easy to ignore; a question about their own day is answered almost "
+    "reflexively, and the answer is the conversation.\n\n"
     "HARD RULES:\n"
+    "- Pitch ONLY what the brief names. If the brief says stock and orders, never mention their "
+    "website. Telling a business with a good site that its site is poor destroys the message.\n"
     "- Always name your company and yourself in the first line. They have never heard of you, and "
     "an unsigned message from an unknown number reads like spam.\n"
     "- End with our website on its own last line, exactly as given in the brief and nothing else "
-    "on that line. It is the only proof they have that we are a real company, and it lets them "
-    "check us before replying.\n"
-    "- Never explain the technical fault, only what it costs them.\n"
+    "on that line. It is the only proof they have that we are a real company.\n"
+    "- Never explain a technical fault, only what it costs them.\n"
     "- No preamble: skip 'hope you are doing well', 'I wanted to reach out', 'I was browsing'.\n"
     "- No corporate words: never 'solution', 'streamline', 'digital presence', 'optimise', or "
     "the bare words ERP or CRM. Say what the system DOES in the owner's own language.\n"
+    "- No flattery as an opener. 'Your business looks great' is what every spammer writes; a "
+    "fact they can check is the opposite of flattery.\n"
+    "- Vary your wording. These messages go out in batches to the same trade in the same city, "
+    "and an owner who has seen the identical sentence from us before stops reading.\n"
     "- Polite and businesslike, but not stiff. No hype, no ALL CAPS, at most one emoji, no "
-    "prices, no link other than our own website.\n"
-    "- Sound like one professional writing to another, not a company broadcasting.\n\n"
-    "GOOD (46 words):\n"
+    "prices, no link other than our own website.\n\n"
+    "GOOD \u2014 a clinic with no website (44 words):\n"
     "Salam, I'm Kashif from Eldian Core.\n"
-    "Parents searching for your school online can't find a website — they end up calling "
-    "someone else.\n"
-    "We build school sites plus fee, admission and attendance systems.\n"
-    "Can we discuss this?\n"
+    "You have 4.7 stars from 180 reviews, but no website \u2014 so anyone searching for a dentist "
+    "in Islamabad lands on someone else.\n"
+    "We build clinic sites with online appointment booking.\n"
+    "How are patients booking with you at the moment \u2014 mostly by phone?\n"
     "www.eldiancore.com\n\n"
-    "Match that length, rhythm and ending exactly.\n\n"
+    "GOOD \u2014 a furniture maker with a good site, collected for stock and orders (47 words):\n"
+    "Salam, I'm Kashif from Eldian Core.\n"
+    "You take custom orders, which usually means stock and delivery dates are tracked across "
+    "registers and WhatsApp.\n"
+    "We put orders and stock in one place, so you can see where an order is without walking to "
+    "the workshop.\n"
+    "How are you tracking orders right now \u2014 registers?\n"
+    "www.eldiancore.com\n\n"
+    "Notice the second one never mentions a website. Match that length, rhythm and ending.\n\n"
     "OUTPUT: the finished message and nothing else. Do not restate the task, do not label the "
     "lines ('Line 1:', 'Greeting'), do not plan out loud, do not count the words afterwards, "
     "and do not use markdown bullets or asterisks. The next thing you write is read by the "
@@ -1210,13 +1244,22 @@ async def whatsapp_message(body: WaMessageBody):
     if not number:
         raise HTTPException(status_code=400, detail="This lead has no usable WhatsApp number.")
 
-    angle = _angle_for(lead)
     profile = company_profile.get_profile()
     niche = lead.get("niche", "")
-    # What this INDUSTRY actually buys, not our generic service list. This is
-    # what turns "you have no website" into a message worth replying to.
-    systems = niche_services_for(niche, limit=4)
     audience = niche_audience_for(niche)
+    # The pitch comes from WHY the lead was collected. A business collected for
+    # a CRM must not be told its H1 tag is missing: that was the single biggest
+    # reason messages read as obviously automated. Older leads have no stored
+    # purposes, so they are diagnosed on the spot rather than skipped.
+    purposes = lead.get("purposes") or diagnose_purposes(lead)
+    pitch = purpose_brief(purposes, lead)
+    if pitch:
+        angle, systems = "", []
+    else:
+        # Nothing we can honestly diagnose. Fall back to the generic angle
+        # rather than send nothing at all.
+        angle = _angle_for(lead)
+        systems = niche_services_for(niche, limit=4)
     # The worked example in WA_SYSTEM is English, and the model kept copying
     # its language along with its shape, so the Roman Urdu instruction has to
     # be emphatic and show the register it means.
@@ -1234,9 +1277,10 @@ async def whatsapp_message(body: WaMessageBody):
         f"{profile.get('company_name','')} — this goes in the FIRST line, every time.\n\n"
         f"WHO YOU ARE WRITING TO: {lead.get('business_name')} — {niche} in {lead.get('city','')}\n"
         f"WHO THEY WANT TO REACH: {audience}\n\n"
-        f"WHAT YOU FOUND (say the consequence in ONE plain clause, never the technical "
-        f"detail):\n{angle}\n\n"
-        f"MENTION ONE OR TWO OF THESE, in the owner's own words:\n- " + "\n- ".join(systems) + "\n\n"
+        + (f"{pitch}\n\n" if pitch else
+           f"WHAT YOU FOUND (say the consequence in ONE plain clause, never the technical "
+           f"detail):\n{angle}\n\n"
+           f"MENTION ONE OR TWO OF THESE, in the owner's own words:\n- " + "\n- ".join(systems) + "\n\n") +
         f"END WITH THIS WEBSITE on its own final line, exactly as written and nothing "
         f"else on that line: {profile.get('website','')}\n\n"
         f"Write the WhatsApp message only — no preamble, no quotes around it. "
