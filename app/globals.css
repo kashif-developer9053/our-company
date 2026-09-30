@@ -1655,6 +1655,43 @@ body {
 }
 .wa-source a { color: #7fb2ea; }
 
+/* How a hunt picks who to search for. Three cards rather than a dropdown:
+   the difference between them is the whole point, and a dropdown hides it. */
+.hunt-modes {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 8px;
+  margin: 6px 0 14px;
+}
+.hunt-mode {
+  text-align: left;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid #23303f;
+  border-radius: 8px;
+  padding: 9px 11px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.hunt-mode:hover:not(:disabled) { border-color: #3c5a1c; }
+.hunt-mode:disabled { opacity: 0.5; cursor: default; }
+.hunt-mode strong {
+  display: block;
+  font-size: 12px;
+  color: #d6dde8;
+  margin-bottom: 3px;
+}
+.hunt-mode span {
+  display: block;
+  font-size: 10.5px;
+  color: #7d8695;
+  line-height: 1.55;
+}
+.hunt-mode.on {
+  background: rgba(143, 224, 0, 0.07);
+  border-color: #8fe000;
+}
+.hunt-mode.on strong { color: #8fe000; }
+
 /* Choosing what to sell before hunting. A CRM prospect and a website prospect
    are found by different tests, so the choice has to come first. */
 .hunt-service { margin: 10px 0; }

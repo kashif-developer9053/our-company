@@ -508,6 +508,12 @@ export const harvestLeads = (body: {
   continue_niche?: boolean;
   // website | crm | erp | booking | lms | pos
   service?: string;
+  // How the hunt picks who to search for:
+  //   niche   — you named the business type
+  //   purpose — you named only what we sell; the hunt walks the business
+  //             types that run on it
+  //   area    — neither; sweep a town's ordinary trades
+  mode?: string;
 }) =>
   req<{
     ok: boolean; batch_id?: string; added?: number; found?: number; target?: number;
@@ -515,7 +521,7 @@ export const harvestLeads = (body: {
     rejected?: { no_contact: number; good_site: number; guessed_email_only: number };
     already_held?: number; niche_total?: number;
     message?: string; next_options?: NextOption[]; error?: string;
-    run_id?: string; status?: string;
+    run_id?: string; status?: string; mode?: string;
   }>("/agent1/harvest-leads", { method: "POST", body: JSON.stringify(body) });
 
 // A hunt runs in the background: the POST returns a run_id immediately and
@@ -527,8 +533,12 @@ export interface HuntStatus {
   rounds?: number; examined?: number; elapsed_seconds?: number;
   complete?: boolean; batch_id?: string; already_held?: number;
   niche_total?: number; next_options?: NextOption[];
-  rejected?: { no_contact: number; good_site: number; guessed_email_only: number };
+  rejected?: { no_contact?: number; good_site?: number; guessed_email_only?: number;
+               too_big_for_sweep?: number; chain_branches?: number };
   error?: string;
+  // Purpose and area hunts search several business types, so the UI can show
+  // which ones actually produced leads.
+  mode?: string; what?: string; niches_searched?: string[];
 }
 export const getHuntStatus = (runId: string) =>
   req<HuntStatus>(`/agent1/hunt-status/${encodeURIComponent(runId)}`);

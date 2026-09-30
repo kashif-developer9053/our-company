@@ -20,6 +20,8 @@ from shared.logger import get_logger
 from shared.safe_wrapper import safe_endpoint
 from supervisor.supervisor_routes import review_niches
 
+from .collection_modes import describe as describe_mode
+from .collection_modes import resolve as resolve_mode
 from .niche_model import NicheRequest, parse_niches, parse_result, serialize
 
 log = get_logger("agent1")
@@ -277,6 +279,15 @@ class HarvestBody(BaseModel):
     # Anything but "website" changes the qualification test, because a site
     # audit cannot tell you whether a business needs a CRM.
     service: str = "website"
+    # How to choose who to search for — see agent1/collection_modes.py.
+    #   niche   : the CEO named the business type (the original behaviour)
+    #   purpose : the CEO named only what we sell; the hunt walks the business
+    #             types that inherently run on it
+    #   area    : neither; sweep a town's ordinary trades and let the
+    #             diagnosis decide what each one needs
+    # Empty falls back to "niche" when a niche was given, "purpose" otherwise,
+    # so an older client that does not send the field keeps working.
+    mode: str = ""
 
 
 @router.get("/hunt-status/{run_id}")
@@ -342,10 +353,20 @@ async def harvest_leads_route(body: HarvestBody):
 
     target = max(1, min(body.target, 200))
     where = ", ".join(x for x in (body.city, body.country) if x) or "your area"
+    mode = resolve_mode(body.mode, body.niche, body.service)
+    what = describe_mode(mode, body.niche, body.service, where)
+
+    # Purpose and area hunts choose their own niches, so the only thing they
+    # genuinely need is somewhere to look.
+    if mode != "niche" and not (body.city or body.country):
+        return {"ok": False, "error": ("Tell me where to look — a city or a country. "
+                                       "This mode picks the business types itself.")}
+    if mode == "niche" and not body.niche.strip():
+        return {"ok": False, "error": "Name a business type, or switch to another mode."}
 
     # "Find more" tops up toward the target rather than restarting from zero.
     already = 0
-    if body.continue_niche:
+    if body.continue_niche and mode == "niche":
         nq: dict = {"niche": {"$regex": f"^{re.escape(body.niche)}$", "$options": "i"},
                     "status": {"$ne": "rejected"}}
         if body.city:
@@ -391,16 +412,104 @@ async def harvest_leads_route(body: HarvestBody):
     run_id = f"hunt_{uuid.uuid4().hex[:8]}"
     _hunt_runs()[run_id] = {
         "id": run_id, "status": "running", "niche": body.niche, "where": where,
+        "mode": mode, "what": what,
         "target": target, "already_held": already, "found": 0,
-        "message": f"Hunting {target} qualified leads: {body.niche} in {where}",
+        "message": f"Hunting {target} qualified leads: {what}",
         "started_at": _now_iso(),
     }
     asyncio.create_task(_run_hunt(run_id, body, target, already, where, exclude))
-    return {"ok": True, "run_id": run_id, "status": "running",
-            "message": (f"Hunting {target} qualified leads for '{body.niche}' in {where}. "
+    return {"ok": True, "run_id": run_id, "status": "running", "mode": mode,
+            "message": (f"Hunting {target} qualified leads: {what}. "
                         f"This runs in the background and can take several minutes — "
                         f"progress appears below."),
             "already_held": already}
+
+
+async def _hunt_across_niches(body: "HarvestBody", target: int, where: str,
+                              exclude: set, progress) -> dict:
+    """Run the hunt over however many niches the mode calls for.
+
+    A niche hunt searches one; a purpose hunt walks the business types that
+    run on what we are selling; an area sweep walks a town's ordinary trades.
+    Each niche is a separate harvest, and the walk stops as soon as the target
+    is met — so a long list costs nothing when the first niche delivers.
+
+    One niche failing never ends the hunt. A search engine timing out on
+    "tuition academies" should not lose the leads already found, which is why
+    each round is isolated.
+    """
+    from .collection_modes import drop_chains, is_small_business, plan
+    from .lead_harvester import harvest_leads
+
+    mode = resolve_mode(body.mode, body.niche, body.service)
+    niches = plan(mode, body.niche, body.service, target)
+    if not niches:
+        return {"leads": [], "examined": 0, "rounds": 0, "elapsed": 0,
+                "rejected": {}, "niches_searched": []}
+
+    leads: list[dict] = []
+    seen = set(exclude)
+    examined = rounds = 0
+    rejected: dict[str, int] = {}
+    searched: list[str] = []
+    too_big = 0
+
+    for i, niche in enumerate(niches, 1):
+        if len(leads) >= target:
+            break
+        remaining = target - len(leads)
+        if mode != "niche":
+            progress(f"[{i}/{len(niches)}] {niche} — {len(leads)}/{target} so far")
+        try:
+            res = await harvest_leads(
+                niche, body.city, body.country, target=remaining,
+                exclude_keys=seen, progress=progress, service=body.service,
+            )
+        except Exception as exc:  # noqa: BLE001 - one dead niche never ends a sweep
+            log.error("Niche '%s' failed (isolated): %s", niche, exc)
+            continue
+
+        rounds += res.get("rounds", 0)
+        examined += res.get("examined", 0)
+        for k, v in (res.get("rejected") or {}).items():
+            rejected[k] = rejected.get(k, 0) + v
+
+        fresh = res.get("leads") or []
+        if mode == "area":
+            # A sweep returns whatever is on the road. The niche modes get
+            # their size test from the service definition; this mode has to
+            # apply its own or it fills up with branches of chains.
+            kept = []
+            for lead in fresh:
+                ok, why = is_small_business(lead)
+                if ok:
+                    kept.append(lead)
+                else:
+                    too_big += 1
+                    rejected["too_big_for_sweep"] = rejected.get("too_big_for_sweep", 0) + 1
+            fresh = kept
+
+        for lead in fresh:
+            key = (lead.get("website") or lead.get("business_name") or "").strip().lower()
+            if key and key in seen:
+                continue
+            if key:
+                seen.add(key)
+            lead.setdefault("niche", niche)
+            leads.append(lead)
+        if fresh:
+            searched.append(niche)
+
+    if mode == "area":
+        # Only visible across the whole sweep: the same name in four places is
+        # a chain, however small each branch looks on its own.
+        leads, dropped = drop_chains(leads)
+        if dropped:
+            rejected["chain_branches"] = rejected.get("chain_branches", 0) + dropped
+
+    return {"leads": leads[:target], "examined": examined, "rounds": rounds,
+            "elapsed": 0, "rejected": rejected, "niches_searched": searched,
+            "mode": mode}
 
 
 async def _run_hunt(run_id: str, body: "HarvestBody", target: int, already: int,
@@ -420,12 +529,11 @@ async def _run_hunt(run_id: str, body: "HarvestBody", target: int, already: int,
         if run_id in runs:
             runs[run_id]["message"] = msg[:200]
 
-    _set_status("working", f"Hunting {target} qualified leads: {body.niche} in {where}")
+    what = describe_mode(body.mode, body.niche, body.service, where)
+    _set_status("working", f"Hunting {target} qualified leads: {what}")
     try:
-        result = await harvest_leads(
-            body.niche, body.city, body.country, target=target, exclude_keys=exclude,
-            progress=progress, service=body.service,
-        )
+        result = await _hunt_across_niches(
+            body, target, where, exclude, progress)
     except Exception as exc:  # noqa: BLE001
         _set_status("error", f"Lead hunt failed: {exc}")
         log.error("Harvest failed (isolated): %s", exc)
@@ -447,13 +555,13 @@ async def _run_hunt(run_id: str, body: "HarvestBody", target: int, already: int,
         lead["status"] = "pending_approval"
         lead["batch_id"] = batch_id
     stored = add_leads(leads, source="agent1_harvest",
-                       last_action=f"Harvested + audited by Agent 1 ({body.niche})")
+                       last_action=f"Harvested by Agent 1 ({what})")
 
     notifications.notify(
         "approval",
         f"{stored['added']} qualified leads ready for review",
-        f"Agent 1 examined {result['examined']} businesses across {result['rounds']} searches for "
-        f"'{body.niche}' in {where}. Every lead has a verified contact and evidenced website problems.",
+        f"Agent 1 examined {result['examined']} businesses across {result['rounds']} searches: "
+        f"{what}. Every lead has a verified contact and a stated reason we can sell to them.",
         agent_id="agent1", action="leads_pending", ref_id=batch_id,
     )
     _set_status("idle")

@@ -7,7 +7,11 @@ import type { NextOption } from "@/lib/api";
 interface Result {
   found: number; target: number; complete: boolean; rounds: number; examined: number;
   elapsed_seconds: number; added: number; message: string; next_options: NextOption[];
-  rejected: { no_contact: number; good_site: number; guessed_email_only: number };
+  rejected: { no_contact?: number; good_site?: number; guessed_email_only?: number;
+              too_big_for_sweep?: number; chain_branches?: number };
+  // Purpose and area hunts walk several business types; these say which ones
+  // actually produced something, so the next hunt can be aimed better.
+  nichesSearched: string[];
   // Running totals for the niche, so "find more" reads as progress toward the
   // target rather than each hunt looking like it only found three or four.
   alreadyHeld: number; nicheTotal: number;
@@ -32,6 +36,10 @@ export default function LeadHunter({ onDone }: { onDone?: () => void }) {
   // else is judged by industry and size, because no scan reveals that a
   // business is tracking stock on paper.
   const [service, setService] = useState("website");
+  // How the hunt picks who to search for. "niche" is the original behaviour;
+  // the other two exist so finding leads does not depend on the CEO thinking
+  // of the right business type every morning.
+  const [mode, setMode] = useState<"niche" | "purpose" | "area">("niche");
   const [services, setServices] = useState<api.ServiceTarget[]>([]);
   useEffect(() => {
     api.getServices().then((r) => setServices(r.services ?? [])).catch(() => {});
@@ -55,7 +63,14 @@ export default function LeadHunter({ onDone }: { onDone?: () => void }) {
 
   const run = async (opts?: { niche?: string; city?: string; country?: string; continueNiche?: boolean }) => {
     const n = (opts?.niche ?? niche).trim();
-    if (!n || busy) return;
+    // Only a niche hunt needs a niche. The other two modes need a place,
+    // because they choose the business types themselves.
+    if (busy) return;
+    if (mode === "niche" && !n) return;
+    if (mode !== "niche" && !city.trim() && !country.trim()) {
+      setErr("Tell me where to look — a city or a country.");
+      return;
+    }
     // Keep the previous result on screen while hunting. Clearing it here
     // removed the "find more in this niche" button the moment it was
     // pressed, and an empty hunt then left nothing to click at all.
@@ -68,6 +83,7 @@ export default function LeadHunter({ onDone }: { onDone?: () => void }) {
         target,
         continue_niche: opts?.continueNiche ?? false,
         service,
+        mode,
       });
       if (!r.ok) { setErr(r.error || "Hunt failed."); return; }
       setLastNiche(n);
@@ -83,9 +99,10 @@ export default function LeadHunter({ onDone }: { onDone?: () => void }) {
         found: r.found ?? 0, target: r.target ?? target, complete: !!r.complete,
         rounds: r.rounds ?? 0, examined: r.examined ?? 0, elapsed_seconds: r.elapsed_seconds ?? 0,
         added: r.added ?? 0, message: r.message ?? "", next_options: r.next_options ?? [],
-        rejected: r.rejected ?? { no_contact: 0, good_site: 0, guessed_email_only: 0 },
+        rejected: r.rejected ?? {},
         alreadyHeld: r.already_held ?? 0,
         nicheTotal: r.niche_total ?? (r.added ?? 0),
+        nichesSearched: [],
       });
       onDone?.();
     } catch (e) { setErr((e as Error).message); }
@@ -108,9 +125,10 @@ export default function LeadHunter({ onDone }: { onDone?: () => void }) {
         rounds: st.rounds ?? 0, examined: st.examined ?? 0,
         elapsed_seconds: st.elapsed_seconds ?? 0, added: st.added ?? 0,
         message: st.message ?? "", next_options: st.next_options ?? [],
-        rejected: st.rejected ?? { no_contact: 0, good_site: 0, guessed_email_only: 0 },
+        rejected: st.rejected ?? {},
         alreadyHeld: st.already_held ?? 0,
         nicheTotal: st.niche_total ?? (st.added ?? 0),
+        nichesSearched: st.niches_searched ?? [],
       });
       onDone?.();
       return;
@@ -137,14 +155,51 @@ export default function LeadHunter({ onDone }: { onDone?: () => void }) {
       </p>
 
       <div className="hunt-service">
-        <label className="build-label">What are you selling?</label>
-        <select className="af-input" value={service} disabled={busy}
-          onChange={(e) => setService(e.target.value)}>
-          {services.map((s) => (
-            <option key={s.key} value={s.key}>{s.label}</option>
+        <label className="build-label">How should Agent 1 choose who to search for?</label>
+        <div className="hunt-modes">
+          {([
+            { k: "niche", t: "I know the business type",
+              d: "You name it — dentists, furniture makers. Exact control." },
+            { k: "purpose", t: "I know what I'm selling",
+              d: "Name only the service. Agent 1 walks the business types that run on it." },
+            { k: "area", t: "Just find me small businesses",
+              d: "Sweep a town's ordinary trades and let the diagnosis decide what each needs." },
+          ] as const).map((m) => (
+            <button key={m.k} type="button" disabled={busy}
+              className={`hunt-mode ${mode === m.k ? "on" : ""}`}
+              onClick={() => setMode(m.k)}>
+              <strong>{m.t}</strong>
+              <span>{m.d}</span>
+            </button>
           ))}
-        </select>
-        {chosen && chosen.signal !== "site_defect" && (
+        </div>
+
+        {mode !== "area" && (
+          <>
+            <label className="build-label">What are you selling?</label>
+            <select className="af-input" value={service} disabled={busy}
+              onChange={(e) => setService(e.target.value)}>
+              {services.map((s) => (
+                <option key={s.key} value={s.key}>{s.label}</option>
+              ))}
+            </select>
+          </>
+        )}
+        {mode === "area" && (
+          <p className="hunt-hint">
+            No service to pick: a sweep looks at whatever is there and works out what
+            each business needs — a website for one, stock tracking for the next.
+            Chains and branches are skipped, so what comes back is owner-run shops.
+          </p>
+        )}
+        {mode === "purpose" && chosen && chosen.niches.length > 0 && (
+          <p className="hunt-hint">
+            Agent 1 will search these itself, in order, until it has enough:{" "}
+            <strong>{chosen.niches.slice(0, 5).join(", ")}</strong>
+            {chosen.niches.length > 5 && ` and ${chosen.niches.length - 5} more`}.
+          </p>
+        )}
+        {mode === "niche" && chosen && chosen.signal !== "site_defect" && (
           <p className="hunt-hint">
             Looks for businesses where <strong>{chosen.pain}</strong> — their website
             is not the test, so a company with a good site still counts. Big chains
@@ -163,15 +218,20 @@ export default function LeadHunter({ onDone }: { onDone?: () => void }) {
       </div>
 
       <div className="hunt-form">
-        <input className="af-input" placeholder="Niche (e.g. dental clinic)" value={niche}
-          onChange={(e) => setNiche(e.target.value)} disabled={busy} />
-        <input className="af-input" placeholder="City (optional)" value={city}
-          onChange={(e) => setCity(e.target.value)} disabled={busy} />
-        <input className="af-input" placeholder="Country (optional)" value={country}
-          onChange={(e) => setCountry(e.target.value)} disabled={busy} />
+        {mode === "niche" && (
+          <input className="af-input" placeholder="Niche (e.g. dental clinic)" value={niche}
+            onChange={(e) => setNiche(e.target.value)} disabled={busy} />
+        )}
+        <input className="af-input"
+          placeholder={mode === "niche" ? "City (optional)" : "City (e.g. Gujranwala)"}
+          value={city} onChange={(e) => setCity(e.target.value)} disabled={busy} />
+        <input className="af-input"
+          placeholder={mode === "niche" ? "Country (optional)" : "Country"}
+          value={country} onChange={(e) => setCountry(e.target.value)} disabled={busy} />
         <input className="af-input" type="number" min={1} max={200} style={{ width: 90 }} value={target}
           onChange={(e) => setTarget(Number(e.target.value))} disabled={busy} title="How many qualified leads" />
-        <button className="btn-mini primary" onClick={() => run()} disabled={busy || !niche.trim()}>
+        <button className="btn-mini primary" onClick={() => run()}
+          disabled={busy || (mode === "niche" ? !niche.trim() : !city.trim() && !country.trim())}>
           {busy ? "Hunting…" : `Find ${target} leads`}
         </button>
       </div>
@@ -195,11 +255,27 @@ export default function LeadHunter({ onDone }: { onDone?: () => void }) {
             )}
           </div>
           <p className="muted small">{result.message}</p>
+          {result.nichesSearched.length > 0 && (
+            <p className="hunt-hint">
+              Found leads in:{" "}
+              {result.nichesSearched.map((n) => (
+                <button key={n} type="button" className="hunt-nichechip"
+                  title="Hunt this business type on its own"
+                  onClick={() => { setMode("niche"); setNiche(n); }}>{n}</button>
+              ))}
+            </p>
+          )}
           <div className="hunt-stats">
             <span>{result.examined} businesses examined</span>
             <span>{result.rounds} search rounds</span>
-            <span>{result.rejected.no_contact} rejected — no verified contact</span>
-            <span>{result.rejected.good_site} rejected — site already fine</span>
+            <span>{result.rejected.no_contact ?? 0} rejected — no verified contact</span>
+            <span>{result.rejected.good_site ?? 0} rejected — site already fine</span>
+            {!!result.rejected.too_big_for_sweep && (
+              <span>{result.rejected.too_big_for_sweep} skipped — too big or too new</span>
+            )}
+            {!!result.rejected.chain_branches && (
+              <span>{result.rejected.chain_branches} skipped — branches of chains</span>
+            )}
             <span>{Math.round(result.elapsed_seconds / 60)} min</span>
           </div>
           {result.added > 0 && (
