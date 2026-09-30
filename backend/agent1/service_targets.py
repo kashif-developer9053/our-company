@@ -106,7 +106,10 @@ DEFAULT_SERVICE = "website"
 # Chosen from the data: local shops and clinics sit in the tens, established
 # regional firms in the low hundreds, national chains in the thousands.
 SOFTWARE_MIN_REVIEWS = 5
-SOFTWARE_MAX_REVIEWS = 800
+# Lowered from 800 on the CEO's call. At 800 the net was catching established
+# regional firms that already run a system and never answer cold outreach; the
+# businesses that actually reply sit well under a hundred reviews.
+SOFTWARE_MAX_REVIEWS = 100
 
 
 def get(service: str) -> dict:

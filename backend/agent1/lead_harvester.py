@@ -301,9 +301,13 @@ async def harvest_leads(
         except Exception as exc:  # noqa: BLE001
             log.error("Enrichment failed (isolated): %s", exc)
 
-        # 4) Audit their sites so every kept lead has evidenced problems.
+        # 4) Audit their sites. For a website hunt this is the qualifying
+        #    test; for CRM/ERP/booking it only answers "does their site work",
+        #    which the purpose diagnosis needs — so it must not also claim the
+        #    collection reason.
         try:
-            await audit_leads(fresh, concurrency=_AUDIT_CONCURRENCY)
+            await audit_leads(fresh, concurrency=_AUDIT_CONCURRENCY,
+                              set_reason=is_website_service(service))
         except Exception as exc:  # noqa: BLE001
             log.error("Audit failed (isolated): %s", exc)
 
@@ -372,7 +376,8 @@ async def harvest_leads(
             _merge(pool, wider)
             try:
                 await enrich_lead_emails(wider, concurrency=8)
-                await audit_leads(wider, concurrency=_AUDIT_CONCURRENCY)
+                await audit_leads(wider, concurrency=_AUDIT_CONCURRENCY,
+                                  set_reason=is_website_service(service))
             except Exception as exc:  # noqa: BLE001
                 log.error("Widened enrichment/audit failed (isolated): %s", exc)
             for lead in wider:

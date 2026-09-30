@@ -402,11 +402,20 @@ def _add_presence_findings(lead: dict, audit: dict) -> None:
     audit["summary"] = build_reason(audit)
 
 
-async def audit_leads(leads: list[dict], concurrency: int = 5) -> int:
+async def audit_leads(leads: list[dict], concurrency: int = 5,
+                      set_reason: bool = True) -> int:
     """Audit every lead that has a website. Attaches audit data in place.
 
     Leads with NO website get a 'no website at all' reason (the strongest pitch
     for a web-development agency). Returns how many were audited.
+
+    `set_reason=False` keeps the findings but stops the audit from writing
+    `collection_reason`. When we are hunting CRM or stock clients the site is
+    not why we collected them, and the audit's verdict was overwriting the real
+    reason — which is how leads gathered for a CRM ended up with "their site
+    has fixable problems" as their stated justification. The findings are still
+    needed: whether a site loads decides whether a website is worth pitching
+    alongside the main sale.
     """
     sem = asyncio.Semaphore(concurrency)
     async with httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=True,
@@ -424,7 +433,8 @@ async def audit_leads(leads: list[dict], concurrency: int = 5) -> int:
                     "audited_at": _now(),
                 }
                 lead["site_audit"]["summary"] = build_reason(lead["site_audit"])
-                lead["collection_reason"] = lead["site_audit"]["summary"]
+                if set_reason:
+                    lead["collection_reason"] = lead["site_audit"]["summary"]
                 lead["opportunity_score"] = lead["site_audit"]["score"]
                 lead["pitch_points"] = build_pitch_points(lead["site_audit"])
                 return True
@@ -432,7 +442,8 @@ async def audit_leads(leads: list[dict], concurrency: int = 5) -> int:
                 audit = await audit_site(site, client)
             _add_presence_findings(lead, audit)
             lead["site_audit"] = audit
-            lead["collection_reason"] = audit["summary"]
+            if set_reason:
+                lead["collection_reason"] = audit["summary"]
             lead["opportunity_score"] = audit["score"]
             lead["pitch_points"] = build_pitch_points(audit)
             return audit["ok"]

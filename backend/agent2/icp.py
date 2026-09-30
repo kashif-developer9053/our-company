@@ -87,6 +87,14 @@ def classify(lead: dict) -> tuple[str, str]:
     if m:
         return "blocked", f"not a sellable business ({m.group(0).strip()})"
 
+    # Government and institutional bodies. Checked on the NAME only: a niche of
+    # "government hospital" is a search term describing what we are looking
+    # through, and matching it would reject the private clinics beside them.
+    m = _INSTITUTIONAL_RE.search(name)
+    if m:
+        return "blocked", (f"a government or institutional body ({m.group(0).strip()}) — "
+                           f"buys through tenders, never from cold outreach")
+
     # Only the NAME implicates a competitor. A niche of "ERP for manufacturers"
     # is a search term describing who we want to reach, not the lead itself —
     # matching on it rejected exactly the manufacturers we were looking for.
@@ -131,9 +139,20 @@ _BIG_BRANDS = (
     r"interwood", r"dawlance", r"haier", r"orient group", r"\bpel\b", r"waves",
     r"honda atlas", r"toyota indus", r"pak suzuki", r"mcdonald", r"\bkfc\b",
     r"pizza hut", r"hardee", r"daraz", r"foodpanda", r"careem", r"bykea",
-    r"easypaisa", r"jazzcash", r"\bptcl\b", r"\bnadra\b", r"\bwapda\b", r"\bsngpl\b",
+    r"easypaisa", r"jazzcash", r"\bptcl\b",
+    # A bakery in WAPDA Town and a shop that is "NADRA registered" are
+    # private businesses borrowing the word, not the utility itself.
+    r"\bnadra\b(?!\s*(?:approved|registered|authoris|authoriz|certified|licen|e.?sahulat|kiosk|franchise))",
+    r"\bwapda\b(?!\s*(?:approved|registered|authoris|authoriz|certified|licen|town|colony|road|market|chowk|flats))",
+    r"\bsngpl\b",
     r"\bogdcl\b", r"\bppl\b", r"descon", r"\bnlc\b", r"\bpia\b", r"serena hotel",
     r"pearl continental", r"marriott", r"avari",
+    # large local chains: many branches, a head office, and an agency already.
+    r"savour foods?", r"student biryani", r"bundu khan", r"kaybees",
+    r"chaaye khana", r"gloria jean", r"tehzeeb baker", r"united king",
+    r"bread ?& ?beyond", r"jalal sons", r"al.?fatah", r"imtiaz super",
+    r"chase up", r"metro cash", r"hyperstar", r"naheed super",
+    r"cafe zouk", r"monal", r"howdy", r"optp", r"johnny ?& ?jugnu",
 )
 _BIG_BRAND_RE = re.compile(
     r"^(?:the\s+)?(?:" + "|".join(_BIG_BRANDS) + r")\b|\b(?:" + "|".join(_BIG_BRANDS) + r")\s+(?:limited|ltd|pvt|group|industries|corporation)\b",
@@ -151,6 +170,54 @@ _CORPORATE_RE = re.compile(
 # have someone handling its web presence. Chosen from the data: local shops and
 # clinics sit in the tens, national chains in the thousands.
 _WELL_SERVED_REVIEWS = 1500
+
+
+# Public-sector and institutional bodies. These never buy software from a cold
+# WhatsApp message: procurement runs through tenders, the person on the Maps
+# listing has no budget authority, and several are federal hospitals whose
+# "enquiry" number is a ward desk.
+#
+# PIMS reached the outreach queue as an ordinary prospect, which is how this
+# list started. Matched on the name only, and deliberately on whole words:
+# "National Electronics" on a Rawalpindi side street is a shop, not the state,
+# so a generic word like "national" or "public" is never enough on its own.
+_INSTITUTIONAL = (
+    # named government hospitals and institutes that came through as leads
+    r"\bpims\b", r"pakistan institute of medical sciences",
+    r"services hospital", r"\bcmh\b", r"combined military hospital",
+    r"jinnah (?:hospital|postgraduate|medical)", r"mayo hospital",
+    r"nishtar (?:hospital|medical)", r"\bpaec\b", r"ganga ram hospital",
+    r"holy family hospital", r"benazir bhutto hospital", r"lady reading hospital",
+    r"\bkth\b", r"khyber teaching", r"civil hospital", r"district headquarter",
+    r"\bdhq\b", r"\bthq\b", r"tehsil headquarter", r"basic health unit",
+    r"rural health cent", r"\bnicvd\b", r"\bsiut\b", r"\bpkli\b",
+    # the state itself
+    r"\bgovt\b", r"government of", r"\bprovincial government\b",
+    r"\bfederal (?:government|ministry|board|directorate|secretariat|bureau|authority|college|university|hospital)\b",
+    r"\bcantonment board\b", r"\bcantt board\b",
+    # "WAPDA Approved Work" is a transformer repair shop advertising its
+    # certification; "NADRA registered" is an agent. The authority itself
+    # never appends approved/registered/authorised to its own name.
+    r"\bwapda\b(?!\s*(?:approved|registered|authoris|authoriz|certified|licen|town|colony|road|market|chowk|flats))",
+    r"\bnadra\b(?!\s*(?:approved|registered|authoris|authoriz|certified|licen|e.?sahulat|kiosk|franchise))",
+    # A bare "police", "army" or "federal" is not enough: Army Bakers,
+    # Police Line Tailors and Federal Cloth House are small shops that
+    # borrow the word. Each needs a noun that only the institution uses.
+    r"\bpolice (?:station|department|lines? (?:hospital|hq|headquarter))\b",
+    r"\barmy (?:public school|medical|welfare|headquarter)\b",
+    r"\b(?:pak )?(?:navy|air force) (?:base|hospital|school|headquarter)\b",
+    r"\bgarrison (?:hospital|school|academy|mess|officers)\b",
+    r"\bpaf (?:base|hospital|school|college|museum)\b", r"\bpns \b",
+    r"development authority", r"\bcda\b", r"\blda\b", r"\bkda\b", r"\brda\b",
+    r"municipal corporation", r"city district", r"union council",
+    r"public sector", r"autonomous body", r"\bsecretariat\b",
+    r"directorate", r"\bcommissioner\b", r"deputy commissioner",
+    # public universities and boards behave the same way
+    r"board of intermediate", r"\bbise\b", r"\bhec\b", r"higher education commission",
+    r"punjab university", r"university of the punjab", r"quaid-?i-?azam university",
+    r"\bnust\b", r"\buet\b", r"\bnca\b",
+)
+_INSTITUTIONAL_RE = re.compile("|".join(_INSTITUTIONAL), re.I)
 
 
 # A business listing carries some marker of being a business: a trade word, a
