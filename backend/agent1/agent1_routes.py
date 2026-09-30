@@ -463,7 +463,11 @@ async def _hunt_across_niches(body: "HarvestBody", target: int, where: str,
         try:
             res = await harvest_leads(
                 niche, body.city, body.country, target=remaining,
-                exclude_keys=seen, progress=progress, service=body.service,
+                exclude_keys=seen, progress=progress,
+                # A sweep chose no service, so the "website" the UI left in
+                # the field must not bias the diagnosis or the size test.
+                service="" if mode == "area" else body.service,
+                sweep=(mode == "area"),
             )
         except Exception as exc:  # noqa: BLE001 - one dead niche never ends a sweep
             log.error("Niche '%s' failed (isolated): %s", niche, exc)

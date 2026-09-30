@@ -32,6 +32,18 @@ from .website_miner import mine_business_websites
 log = get_logger("agent1.harvester")
 
 
+
+def _qualifies(service: str, lead: dict, sweep: bool) -> tuple[bool, str]:
+    """Is this lead worth keeping, given what the hunt is looking for?"""
+    if not sweep:
+        return service_qualifies(service, lead)
+    # An area sweep has no service to test against. The honest question is
+    # whether the diagnosis found anything we could sell them — if it did not,
+    # there is no message to write and the lead is worthless.
+    if diagnose_purposes(lead):
+        return True, ""
+    return False, "nothing we can honestly sell them"
+
 def _stamp_purpose(lead: dict, service: str) -> None:
     """Record WHY this lead was collected, so outreach can pitch the right thing.
 
@@ -209,11 +221,18 @@ async def harvest_leads(
     exclude_keys: set[str] | None = None,
     progress=None,
     service: str = "website",
+    sweep: bool = False,
 ) -> dict:
     """Search repeatedly until `target` qualified leads are collected.
 
     `progress` is an optional callable(str) used to report live status.
     `exclude_keys` lets a follow-up run skip businesses already collected.
+
+    `sweep` means an area sweep, where no service was chosen: the caller is
+    asking "what is here and what does it need". The service test is wrong
+    then — it would reject every business with a working website, which is
+    most of them, and those are exactly the ones that need a till or a CRM.
+    The question becomes whether we can honestly sell them anything at all.
     """
     where = ", ".join(x for x in (city, country) if x) or "your area"
     started = time.perf_counter()
@@ -325,7 +344,8 @@ async def harvest_leads(
             # For website work the audit decides. For CRM/ERP/booking the
             # audit is the wrong test — a business with a perfect site may
             # still be running stock on paper — so size decides instead.
-            fits, why_not = service_qualifies(service, lead)
+            # A sweep asks neither: it keeps whatever we can sell something to.
+            fits, why_not = _qualifies(service, lead, sweep)
             if not fits:
                 rejected["good_site"] += 1
                 continue
@@ -388,7 +408,7 @@ async def harvest_leads(
                 if not contact_ok:
                     rejected["no_contact"] += 1
                     continue
-                fits, why_not = service_qualifies(service, lead)
+                fits, why_not = _qualifies(service, lead, sweep)
                 if not fits:
                     rejected["good_site"] += 1
                     continue
