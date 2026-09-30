@@ -1640,6 +1640,29 @@ body {
   white-space: nowrap;
 }
 
+/* What we are SELLING a lead, as opposed to .wa-issue which is what is wrong
+   with their website. Green because it is the pitch, not a fault. */
+.wa-purpose {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid #4a5c20;
+  background: rgba(143, 224, 0, 0.07);
+  color: #8fe000;
+  white-space: nowrap;
+}
+
+/* Their own website, opened in a new tab. Judging a lead means looking at the
+   site, and a plain "live"/"down" label meant retyping the URL by hand. */
+.site-link {
+  color: #7fb2ea;
+  text-decoration: none;
+  font-size: 11px;
+  white-space: nowrap;
+}
+.site-link:hover { text-decoration: underline; }
+.site-link.down { color: #e0913f; }
+
 /* Whether a number actually has WhatsApp. Landlines are decided locally and
    free; mobiles need the validator, so "not checked" is a real third state. */
 .wa-yes     { color: #8fe000; font-size: 11px; white-space: nowrap; }

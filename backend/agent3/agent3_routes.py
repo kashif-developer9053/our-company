@@ -1149,6 +1149,9 @@ async def whatsapp_leads(status: str = "all", only_usable: bool = True, limit: i
         "created_at": 1, "appears_no_website": 1, "site_audit.findings.code": 1,
         "country": 1, "source": 1, "discovery_source": 1, "social_url": 1,
         "website": 1,
+        # What we are selling them. The desk shows this instead of the website
+        # fault, so it has to survive the projection.
+        "purposes": 1,
         "wa_verified": 1,
     }
     out: list[dict] = []

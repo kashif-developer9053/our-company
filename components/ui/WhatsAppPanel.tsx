@@ -335,9 +335,22 @@ export default function WhatsAppPanel() {
                     )}
                   </td>
                   <td>
-                    {l.issue
-                      ? <span className="wa-issue">{l.issue}</span>
-                      : <span className="muted small">—</span>}
+                    {/* What we are SELLING them, not what is wrong with their
+                        site. A lead collected for stock tracking was labelled
+                        "Not secure" here, which is not what the message says
+                        and made every lead look like a website lead. */}
+                    {l.purpose
+                      ? <span className="wa-purpose">{l.purpose}</span>
+                      : l.issue
+                        ? <span className="wa-issue">{l.issue}</span>
+                        : <span className="muted small">—</span>}
+                    {l.website && (
+                      <div style={{ marginTop: 3 }}>
+                        <a href={l.website.startsWith("http") ? l.website : `https://${l.website}`}
+                           target="_blank" rel="noopener noreferrer"
+                           className="site-link" title={l.website}>their site ↗</a>
+                      </div>
+                    )}
                   </td>
                   <td className="muted">+{l.number}</td>
                   <td>

@@ -106,7 +106,16 @@ export default function PendingLeadsPanel({ onChanged }: { onChanged?: () => voi
                         <div style={{ fontSize: 11 }}>{l.phone || ""}</div>
                       </td>
                       <td className="muted">
-                        {l.website ? (l.has_working_website ? "live" : "down") : "none"}
+                        {l.website ? (
+                          // Judging a lead means looking at the site. Retyping
+                          // the URL from a plain label was the only way to.
+                          <a href={l.website.startsWith("http") ? l.website : `https://${l.website}`}
+                             target="_blank" rel="noopener noreferrer"
+                             className={`site-link ${l.has_working_website ? "" : "down"}`}
+                             title={l.website}>
+                            {l.has_working_website ? "live ↗" : "down ↗"}
+                          </a>
+                        ) : "none"}
                       </td>
                       <td><LeadReason lead={l} compact /></td>
                     </tr>

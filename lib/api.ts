@@ -143,6 +143,11 @@ export interface ApiLead {
   discovery_source?: string;
   // Why this lead was collected, backed by a real website audit.
   collection_reason?: string;
+  // What we can actually sell them, strongest first — website | booking |
+  // erp | crm | pos | lms | seo. This is what outreach pitches on, so it is
+  // also what the approval screen should show.
+  purposes?: string[];
+  service_target?: string;
   opportunity_score?: number;
   pitch_points?: string[];
   site_audit?: {
@@ -458,7 +463,12 @@ export const retryFailedDrafts = (body: { draft_ids?: string[] }) =>
 
 // ---- WhatsApp outreach (click-to-send, manual) ----------------------------
 export interface WhatsAppLead {
+  // The headline WEBSITE fault. Kept for the filter; it is often not why the
+  // lead was collected, so the desk shows `purpose` instead.
   issue?: string;
+  // What we are selling them — what the message will actually pitch.
+  purpose?: string;
+  purposes?: string[];
   created_at?: string;
   // yes | no | unknown | "" (never checked)
   has_whatsapp?: string;
@@ -473,6 +483,8 @@ export interface WhatsAppLead {
   status: "not_contacted" | "message_sent" | "replied" | "interested" | "not_interested" | "invalid_number";
   remarks: string; message: string; sent_at: string; updated_at: string;
   collection_reason: string; opportunity_score: number;
+  // Their own site, so it can be opened before writing to them.
+  website?: string;
   site_audit?: { findings?: { code: string; severity: string; title: string; evidence: string; pitch: string }[] };
 }
 export interface WaFacet { value: string; count: number }

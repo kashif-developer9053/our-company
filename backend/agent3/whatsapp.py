@@ -181,8 +181,16 @@ def serialize(lead: dict) -> dict:
         "opportunity_score": lead.get("opportunity_score", 0),
         "site_audit": audit if isinstance(audit, dict) else {},
         # The single headline problem, so the list can be filtered and scanned
-        # without loading every lead's full audit.
+        # without loading every lead's full audit. This is a WEBSITE fault and
+        # is often not why we collected the lead at all, so it stays as the
+        # filter while `purpose` below is what the desk actually shows.
         "issue": _headline_issue(lead),
+        # What we are selling this business — the thing the message will pitch.
+        # Without it the desk labelled a lead collected for stock tracking
+        # "Not secure", which is neither true to the pitch nor useful before
+        # pressing send.
+        "purpose": _purpose_label(lead),
+        "purposes": lead.get("purposes") or [],
         # yes / no / unknown / "" when never checked. "no" for a landline is
         # decided locally and costs nothing.
         "has_whatsapp": (lead.get("wa_verified") or {}).get("verdict", ""),
@@ -243,6 +251,26 @@ def _source_label(lead: dict) -> str:
     if "google_maps" in disc:
         return "Google Maps listing"
     return _SOURCE_LABELS.get((lead.get("source") or "").strip().lower(), "")
+
+
+
+# Mirrors PURPOSES in agent1/purposes.py, shortened for a table cell.
+_PURPOSE_LABELS = {
+    "website": "Website",
+    "booking": "Online booking",
+    "erp": "Stock & orders",
+    "crm": "Enquiry follow-up",
+    "pos": "Point of sale",
+    "lms": "School system",
+    "seo": "Search visibility",
+}
+
+
+def _purpose_label(lead: dict) -> str:
+    """What we are selling this lead, in words that fit a column."""
+    names = [_PURPOSE_LABELS[p] for p in (lead.get("purposes") or [])
+             if p in _PURPOSE_LABELS]
+    return " + ".join(names[:2])
 
 
 def _headline_issue(lead: dict) -> str:
