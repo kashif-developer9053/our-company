@@ -128,30 +128,61 @@ _AREA_TEMPLATES = (
     "suppliers in {where}",
     "services in {where}",
     "enterprises in {where}",
-    # Proximity is how Maps ranks, so naming the commercial areas of a town
-    # surfaces the businesses a centre-weighted search never reaches. This is
-    # where the ordinary main-road shops come from.
+    # Proximity is how Maps ranks, so naming the commercial part of a town
+    # surfaces businesses a centre-weighted search never reaches. These work
+    # anywhere; the local district words come from _AREA_DISTRICTS below.
     "businesses main road {where}",
-    "businesses main bazar {where}",
     "shops main market {where}",
     "businesses commercial area {where}",
     "businesses industrial area {where}",
     "businesses town centre {where}",
-    "businesses cantt {where}",
-    "businesses saddar {where}",
-    "businesses model town {where}",
-    "businesses satellite town {where}",
-    "businesses civil lines {where}",
-    "businesses college road {where}",
+    "businesses high street {where}",
+    "businesses old town {where}",
     "businesses station road {where}",
-    "businesses gt road {where}",
-    "businesses near {where} bus stand",
     "trading company {where}",
     "industries in {where}",
     "workshop {where}",
     "store {where} contact number",
     "office {where} phone number",
 )
+
+# District words are local. "Cantt", "Saddar" and "GT Road" name real
+# commercial areas in Pakistan and return nothing in Trier; a sweep there was
+# spending rounds on queries that could not match. Only the ones belonging to
+# the country being swept are appended.
+_AREA_DISTRICTS = {
+    "pakistan": ("main bazar", "cantt", "saddar", "model town",
+                 "satellite town", "civil lines", "gt road", "college road"),
+    "india": ("main bazar", "civil lines", "mg road", "market road",
+              "industrial estate"),
+    "bangladesh": ("bazar", "new market", "industrial area"),
+    "united arab emirates": ("industrial area", "souk", "deira", "free zone"),
+    "saudi arabia": ("souq", "industrial city", "king fahd road"),
+    "united kingdom": ("high street", "retail park", "industrial estate",
+                       "trading estate"),
+    "ireland": ("main street", "industrial estate", "retail park"),
+    "germany": ("innenstadt", "gewerbegebiet", "hauptstrasse", "altstadt"),
+    "united states": ("downtown", "main street", "business district"),
+}
+
+
+def _area_queries(country: str) -> tuple[str, ...]:
+    """Location-only query templates, with the district words of that country.
+
+    A sweep searches the PLACE, so the only variation available is how the
+    place is described. Mixing in the wrong country's districts wastes rounds.
+    """
+    key = (country or "").strip().lower()
+    local = ()
+    # An empty country must not match: `"" in name` is true for every entry,
+    # which quietly gave a sweep of an unnamed country Pakistani districts.
+    if key:
+        for name, words in _AREA_DISTRICTS.items():
+            if key == name or key in name or name in key:
+                local = words
+                break
+    return _AREA_TEMPLATES + tuple(
+        "businesses " + w + " {where}" for w in local)
 
 _QUERY_TEMPLATES = (
     "{niche} in {where}",
@@ -346,7 +377,7 @@ async def harvest_leads(
                 pass
 
     # A sweep asks about the PLACE; a niche hunt asks about the trade.
-    templates = _AREA_TEMPLATES if sweep else _QUERY_TEMPLATES
+    templates = _area_queries(country) if sweep else _QUERY_TEMPLATES
     for template in templates:
         if len(qualified) >= target:
             break
