@@ -318,6 +318,35 @@ def has_real_contact(lead: dict) -> tuple[bool, str]:
     return False, "no verified contact method (guessed addresses don't count)"
 
 
+def wanted_contact(lead: dict, want: str) -> tuple[bool, str]:
+    """Does this lead have the kind of contact the CEO asked to collect?
+
+    `want` is "both" (either will do), "email", or "whatsapp". Running an
+    email campaign and collecting 213 phone-only businesses wastes the hunt;
+    so does filling the WhatsApp desk with Tijuana switchboards when the plan
+    was to email.
+
+    "whatsapp" means a number that can actually hold an account — a landline
+    cannot, so it is rejected here rather than collected and skipped later.
+    """
+    want = (want or "both").strip().lower()
+    email = (lead.get("email") or "").strip()
+    phone = (lead.get("phone") or "").strip()
+
+    if want == "email":
+        return (True, "") if email else (False, "no email address")
+
+    if want == "whatsapp":
+        if not phone and not lead.get("whatsapp"):
+            return False, "no phone number"
+        from agent3.whatsapp import mobile_certainty
+        if mobile_certainty(phone) == "no":
+            return False, f"{phone} is a landline — it cannot have WhatsApp"
+        return True, ""
+
+    return True, ""
+
+
 def _merge(existing: dict[str, dict], incoming: list[dict]) -> int:
     """Merge new leads into the pool, filling blanks on duplicates. Returns
     how many genuinely new businesses were added."""
@@ -346,6 +375,7 @@ async def harvest_leads(
     progress=None,
     service: str = "website",
     sweep: bool = False,
+    contact: str = "both",
 ) -> dict:
     """Search repeatedly until `target` qualified leads are collected.
 
@@ -364,7 +394,8 @@ async def harvest_leads(
 
     pool: dict[str, dict] = {}       # every business seen this run
     qualified: dict[str, dict] = {}  # those meeting BOTH criteria
-    rejected = {"no_contact": 0, "good_site": 0, "guessed_email_only": 0}
+    rejected = {"no_contact": 0, "good_site": 0, "guessed_email_only": 0,
+                "wrong_contact_type": 0}
     rounds_run = 0
     barren_rounds = 0  # consecutive rounds that surfaced no new businesses
 
@@ -480,6 +511,11 @@ async def harvest_leads(
                 if (lead.get("email_confidence") or "") == "guessed":
                     rejected["guessed_email_only"] += 1
                 continue
+            # Only the kind of contact this campaign can actually use.
+            type_ok, _why = wanted_contact(lead, contact)
+            if not type_ok:
+                rejected["wrong_contact_type"] += 1
+                continue
             # For website work the audit decides. For CRM/ERP/booking the
             # audit is the wrong test — a business with a perfect site may
             # still be running stock on paper — so size decides instead.
@@ -547,6 +583,10 @@ async def harvest_leads(
                 contact_ok, contact_desc = has_real_contact(lead)
                 if not contact_ok:
                     rejected["no_contact"] += 1
+                    continue
+                type_ok, _why = wanted_contact(lead, contact)
+                if not type_ok:
+                    rejected["wrong_contact_type"] += 1
                     continue
                 fits, why_not = _qualifies(service, lead, sweep)
                 if not fits:

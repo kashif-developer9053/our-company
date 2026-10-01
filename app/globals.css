@@ -1680,6 +1680,14 @@ body {
 
 /* How a hunt picks who to search for. Three cards rather than a dropdown:
    the difference between them is the whole point, and a dropdown hides it. */
+/* Contact-route picker. Same card shape as the mode picker above it. */
+.hunt-contact {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 8px;
+  margin: 6px 0 14px;
+}
+
 .hunt-modes {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));

@@ -288,6 +288,11 @@ class HarvestBody(BaseModel):
     # Empty falls back to "niche" when a niche was given, "purpose" otherwise,
     # so an older client that does not send the field keeps working.
     mode: str = ""
+    # Which contact route this campaign needs: both | email | whatsapp.
+    # An email campaign that collects phone-only businesses wastes the hunt,
+    # and a WhatsApp campaign that collects landlines fills the desk with
+    # numbers nobody can message.
+    contact: str = "both"
 
 
 @router.get("/hunt-status/{run_id}")
@@ -468,6 +473,7 @@ async def _hunt_across_niches(body: "HarvestBody", target: int, where: str,
                 # the field must not bias the diagnosis or the size test.
                 service="" if mode == "area" else body.service,
                 sweep=(mode == "area"),
+                contact=body.contact,
             )
         except Exception as exc:  # noqa: BLE001 - one dead niche never ends a sweep
             log.error("Niche '%s' failed (isolated): %s", niche, exc)

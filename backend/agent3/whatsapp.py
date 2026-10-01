@@ -79,7 +79,34 @@ _LANDLINE_PREFIXES: dict[str, tuple[str, ...]] = {
             "4", "5", "6", "9"),                                     # IE geographic
     "1":   (),                                                       # NANP: not separable
     "91":  ("11", "22", "33", "44", "20", "40", "79", "80"),         # IN metros
+    # Mexico is handled separately in _mexico_mobile: since the 2019
+    # renumbering, mobiles and landlines share one 10-digit format with no
+    # distinguishing prefix, so a prefix table cannot answer it.
 }
+
+# Mexican toll-free and service ranges. These are never personal numbers and
+# can never hold a WhatsApp account.
+_MX_NON_MOBILE = ("800", "900", "880", "01800")
+
+
+def _mexico_mobile(rest: str) -> bool | None:
+    """Is a Mexican number WhatsApp-capable? None when genuinely unknowable.
+
+    Mexico renumbered in 2019: a mobile and a landline in Tijuana are both
+    664 followed by seven digits, and nothing in the number tells them apart.
+    The one real signal is the legacy "1" that WhatsApp still expects after
+    the country code for a mobile — 521... — which is what Meta registered
+    numbers under.
+
+    82 Mexican leads were collected and all 82 passed as mobiles because no
+    rule existed; 72 were Tijuana 664 switchboards and 3 were toll-free. The
+    honest answer for a bare 10-digit number is "unknown", not "yes".
+    """
+    if rest.startswith(_MX_NON_MOBILE):
+        return False
+    if rest.startswith("1") and len(rest) == 11:
+        return True          # 52 1 NNN NNNNNNN — the WhatsApp mobile form
+    return None              # 10-digit: could be either, nothing to go on
 
 # Mobile prefixes, checked first — a positive match is stronger evidence than
 # the absence of a landline prefix.
@@ -91,6 +118,34 @@ _MOBILE_PREFIXES: dict[str, tuple[str, ...]] = {
     "353": ("8",),
     "91":  ("6", "7", "8", "9"),
 }
+
+
+
+def _inferred_wa(lead: dict) -> str:
+    """What the number's shape says, when nobody has verified it."""
+    c = mobile_certainty(lead.get("phone") or "")
+    return "unknown" if c == "unknown" else ""
+
+
+def mobile_certainty(number: str) -> str:
+    """How sure we are a number can hold WhatsApp: yes | no | unknown.
+
+    `looks_mobile` has to answer True or False because the collection gate
+    needs a decision. This exposes the third case so the desk can say
+    "unverified" instead of implying we checked. Mexico is the country where
+    that matters: a 10-digit Tijuana number is genuinely unknowable from the
+    digits alone.
+    """
+    digits = "".join(ch for ch in (number or "") if ch.isdigit())
+    if len(digits) < 8:
+        return "no"
+    if digits.startswith("52"):
+        verdict = _mexico_mobile(digits[2:])
+        return "unknown" if verdict is None else ("yes" if verdict else "no")
+    for cc in sorted(_LANDLINE_PREFIXES, key=len, reverse=True):
+        if digits.startswith(cc):
+            return "yes" if looks_mobile(digits) else "no"
+    return "unknown"       # country we have no rules for
 
 
 def looks_mobile(number: str, dial: str = _DEFAULT_DIAL) -> bool:
@@ -106,6 +161,12 @@ def looks_mobile(number: str, dial: str = _DEFAULT_DIAL) -> bool:
     digits = "".join(ch for ch in number if ch.isdigit())
     if len(digits) < 8:
         return False
+
+    if digits.startswith("52"):
+        verdict = _mexico_mobile(digits[2:])
+        # Unknown stays collectable — a false negative loses a real lead — but
+        # the desk shows it as unverified rather than claiming it is a mobile.
+        return True if verdict is None else verdict
 
     # Longest country code first: 966 must beat 9, 353 must beat 3.
     for cc in sorted(_LANDLINE_PREFIXES, key=len, reverse=True):
@@ -193,7 +254,11 @@ def serialize(lead: dict) -> dict:
         "purposes": lead.get("purposes") or [],
         # yes / no / unknown / "" when never checked. "no" for a landline is
         # decided locally and costs nothing.
-        "has_whatsapp": (lead.get("wa_verified") or {}).get("verdict", ""),
+        # A recorded verification wins; otherwise fall back to what the number
+        # itself can tell us, so a Mexican switchboard is shown as unverified
+        # rather than silently implied to be a mobile.
+        "has_whatsapp": ((lead.get("wa_verified") or {}).get("verdict", "")
+                         or _inferred_wa(lead)),
         # Languages worth offering for this lead's country/city, best first.
         "languages": [{"code": c, "label": _lang_label(c)}
                       for c in _languages_for(lead.get("country", ""), lead.get("city", ""))],

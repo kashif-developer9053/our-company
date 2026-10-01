@@ -8,7 +8,8 @@ interface Result {
   found: number; target: number; complete: boolean; rounds: number; examined: number;
   elapsed_seconds: number; added: number; message: string; next_options: NextOption[];
   rejected: { no_contact?: number; good_site?: number; guessed_email_only?: number;
-              too_big_for_sweep?: number; chain_branches?: number };
+              too_big_for_sweep?: number; chain_branches?: number;
+              wrong_contact_type?: number };
   // Purpose and area hunts walk several business types; these say which ones
   // actually produced something, so the next hunt can be aimed better.
   nichesSearched: string[];
@@ -40,6 +41,10 @@ export default function LeadHunter({ onDone }: { onDone?: () => void }) {
   // the other two exist so finding leads does not depend on the CEO thinking
   // of the right business type every morning.
   const [mode, setMode] = useState<"niche" | "purpose" | "area">("niche");
+  // Which contact route this campaign needs. Collecting phone-only businesses
+  // for an email campaign wastes the hunt, and collecting landlines for a
+  // WhatsApp campaign fills the desk with numbers nobody can message.
+  const [contact, setContact] = useState<"both" | "email" | "whatsapp">("both");
   const [services, setServices] = useState<api.ServiceTarget[]>([]);
   useEffect(() => {
     api.getServices().then((r) => setServices(r.services ?? [])).catch(() => {});
@@ -84,6 +89,7 @@ export default function LeadHunter({ onDone }: { onDone?: () => void }) {
         continue_niche: opts?.continueNiche ?? false,
         service,
         mode,
+        contact,
       });
       if (!r.ok) { setErr(r.error || "Hunt failed."); return; }
       setLastNiche(n);
@@ -176,7 +182,23 @@ export default function LeadHunter({ onDone }: { onDone?: () => void }) {
 
         {mode !== "area" && (
           <>
-            <label className="build-label">What are you selling?</label>
+            <label className="build-label">What contact do you need?</label>
+        <div className="hunt-contact">
+          {([
+            { k: "both", t: "Either", d: "Email or phone — collect whatever they publish." },
+            { k: "email", t: "Email only", d: "Skip businesses with no address. For mail campaigns." },
+            { k: "whatsapp", t: "WhatsApp only", d: "Mobiles only. Landlines are skipped, not collected." },
+          ] as const).map((c) => (
+            <button key={c.k} type="button" disabled={busy}
+              className={`hunt-mode ${contact === c.k ? "on" : ""}`}
+              onClick={() => setContact(c.k)}>
+              <strong>{c.t}</strong>
+              <span>{c.d}</span>
+            </button>
+          ))}
+        </div>
+
+        <label className="build-label">What are you selling?</label>
             <select className="af-input" value={service} disabled={busy}
               onChange={(e) => setService(e.target.value)}>
               {services.map((s) => (
@@ -274,6 +296,9 @@ export default function LeadHunter({ onDone }: { onDone?: () => void }) {
             <span>{result.rejected.good_site ?? 0} rejected — site already fine</span>
             {!!result.rejected.too_big_for_sweep && (
               <span>{result.rejected.too_big_for_sweep} skipped — too big or too new</span>
+            )}
+            {!!result.rejected.wrong_contact_type && (
+              <span>{result.rejected.wrong_contact_type} skipped — not the contact type you asked for</span>
             )}
             {!!result.rejected.chain_branches && (
               <span>{result.rejected.chain_branches} skipped — branches of chains</span>

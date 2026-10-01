@@ -526,6 +526,8 @@ export const harvestLeads = (body: {
   //             types that run on it
   //   area    — neither; sweep a town's ordinary trades
   mode?: string;
+  // Which contact route the campaign needs: both | email | whatsapp.
+  contact?: string;
 }) =>
   req<{
     ok: boolean; batch_id?: string; added?: number; found?: number; target?: number;
@@ -546,7 +548,8 @@ export interface HuntStatus {
   complete?: boolean; batch_id?: string; already_held?: number;
   niche_total?: number; next_options?: NextOption[];
   rejected?: { no_contact?: number; good_site?: number; guessed_email_only?: number;
-               too_big_for_sweep?: number; chain_branches?: number };
+               too_big_for_sweep?: number; chain_branches?: number;
+               wrong_contact_type?: number };
   error?: string;
   // Purpose and area hunts search several business types, so the UI can show
   // which ones actually produced leads.
