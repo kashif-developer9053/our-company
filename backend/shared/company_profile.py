@@ -59,6 +59,30 @@ def profile_as_context() -> str:
     return "\n".join(x for x in parts if x)
 
 
+def profile_for_chat() -> str:
+    """Company facts for an agent TALKING TO THE CEO, not writing to a prospect.
+
+    The full profile ends with the sender's contact details and "Sign emails
+    as: Kashif Rehman (CEO)". Those belong in an outreach email, where the
+    agent is drafting on the CEO's behalf. Fed into a chat system prompt they
+    read as the agent's own identity: Agent 1 answered the CEO by signing off
+    as the CEO, quoting his own email and WhatsApp back at him, and offering
+    him the company's services.
+
+    So chat gets what the company DOES and nothing about who signs for it.
+    """
+    p = get_profile()
+    if not p.get("company_name") and not p.get("services_offered"):
+        return ""
+    parts = [
+        f"You work for {p['company_name']}"
+        + (f" ({p['website']})" if p.get("website") else "") + ".",
+        f"What the company sells: {', '.join(p['services_offered'])}."
+        if p.get("services_offered") else "",
+    ]
+    return "\n".join(x for x in parts if x)
+
+
 def outreach_identity() -> dict:
     """Just the facts Agent 3 needs to sign an email (no prompt formatting)."""
     p = get_profile()

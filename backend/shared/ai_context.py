@@ -17,7 +17,8 @@ def _agent(agent_id: str) -> dict:
     return get_db()["agents"].find_one({"id": agent_id}) or {}
 
 
-def build_system(agent_id: str, task_hint: str = "", draft_instructions: str | None = None) -> str:
+def build_system(agent_id: str, task_hint: str = "", draft_instructions: str | None = None,
+                 chatting: bool = False) -> str:
     a = _agent(agent_id)
     role = a.get("role_key", "")
     instr = draft_instructions if draft_instructions is not None else instructions.get_active(agent_id)
@@ -36,9 +37,31 @@ def build_system(agent_id: str, task_hint: str = "", draft_instructions: str | N
     if kb:
         parts.append("KNOWLEDGE BASE (use if relevant to the task):\n" + kb)
     if include_company:
-        comp = company_profile.profile_as_context()
+        # Writing to a prospect needs the full profile, signature included.
+        # Talking to the CEO must not: the profile ends with "Sign emails as:
+        # Kashif Rehman (CEO)" and his own email and WhatsApp, and the model
+        # read that as its own identity — Agent 1 replied to the CEO signing
+        # off as the CEO and offering him the company's own services.
+        comp = (company_profile.profile_for_chat() if chatting
+                else company_profile.profile_as_context())
         if comp:
-            parts.append("COMPANY PROFILE (ground your output in this real business):\n" + comp)
+            label = ("THE BUSINESS YOU WORK FOR:" if chatting
+                     else "COMPANY PROFILE (ground your output in this real business):")
+            parts.append(label + "\n" + comp)
+    if chatting:
+        parts.append(
+            "WHO YOU ARE TALKING TO: the CEO of this company. He is your boss "
+            "and he runs it; you are his staff member, reporting to him.\n"
+            "- Never sign off as the CEO, and do not sign a chat reply at all.\n"
+            "- Never give him the company's own email, WhatsApp or phone "
+            "number. They are his. Handing them back reads like a brochure.\n"
+            "- Never pitch him the company's services. He sells them.\n"
+            "- Answer as yourself, briefly and plainly.\n"
+            "- You are talking, not acting. You cannot start, stop or pause a "
+            "job from this chat — those are buttons on his screen. If he asks "
+            "you to, say plainly that you cannot and tell him where the "
+            "control is. Never claim you have done something you have not."
+        )
     return "\n\n".join(parts)
 
 
@@ -47,7 +70,7 @@ CHAT_HISTORY_WINDOW = 12  # recent turns fed back to the provider
 
 async def agent_chat(agent_id: str, message: str, history: list[dict], session_id: str = "default",
                      extra_context: str | None = None, max_tokens: int = 500) -> dict:
-    system = build_system(agent_id, message)
+    system = build_system(agent_id, message, chatting=True)
 
     # READ PATH: load the REAL persisted conversation for this session from
     # MongoDB — this is what survives new browser sessions and backend restarts.
