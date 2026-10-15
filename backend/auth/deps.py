@@ -2,6 +2,8 @@
 
 get_current_user  -> requires a valid, non-revoked session for ANY protected route.
 require_admin     -> additionally requires role == "admin" (Settings, Users).
+require_staff     -> everyone EXCEPT role == "caller" (the cold caller, who
+                     may only reach /calls).
 Both enforce server-side — the frontend hiding things is never trusted alone.
 """
 
@@ -35,4 +37,19 @@ def get_current_user(cred: HTTPAuthorizationCredentials | None = Depends(_bearer
 def require_admin(user: dict = Depends(get_current_user)) -> dict:
     if user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="Admin access required")
+    return user
+
+
+def require_staff(user: dict = Depends(get_current_user)) -> dict:
+    """Everyone except the cold caller.
+
+    A caller's account exists to work one queue. He has no reason to reach the
+    CRM, the mailbox, lead hunting or the agents, and several of those can
+    contact a prospect or spend money. Hiding the buttons is not enough — the
+    token is the same token, so the block belongs on the route.
+    """
+    if user.get("role") == "caller":
+        raise HTTPException(
+            status_code=403,
+            detail="Your account only has access to the call desk.")
     return user

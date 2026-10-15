@@ -45,9 +45,10 @@ from agent1.agent1_routes import router as agent1_router  # noqa: E402
 from agent2.agent2_routes import router as agent2_router  # noqa: E402
 from agent3.agent3_routes import router as agent3_router, run_reply_check  # noqa: E402
 from agent3.agent3_routes import webhook_router as agent3_webhook_router  # noqa: E402
+from agent3.call_routes import router as call_router  # noqa: E402
 from agents.agent_registry import router as agents_router, seed_defaults  # noqa: E402
 from auth.auth_routes import router as auth_router  # noqa: E402
-from auth.deps import get_current_user, require_admin  # noqa: E402
+from auth.deps import get_current_user, require_admin, require_staff  # noqa: E402
 from crm.leads_routes import router as leads_router, seed_leads  # noqa: E402
 from it_monitor.it_monitor_routes import router as it_router, run_health_check  # noqa: E402
 from knowledge.kb_routes import router as kb_router  # noqa: E402
@@ -225,7 +226,11 @@ app.include_router(auth_router)
 
 # Every other module now sits behind authentication. A valid session is required
 # for ANY of these routes; Settings + Users additionally require an admin.
-USER = [Depends(get_current_user)]
+# STAFF is the normal gate: any logged-in account EXCEPT a cold caller, whose
+# login exists only to work the call queue. AUTHED is bare authentication, for
+# the call desk itself, which the caller must reach.
+USER = [Depends(require_staff)]
+AUTHED = [Depends(get_current_user)]
 ADMIN = [Depends(require_admin)]
 
 app.include_router(agents_router, dependencies=USER)
@@ -235,6 +240,9 @@ app.include_router(supervisor_router, dependencies=USER)
 app.include_router(agent1_router, dependencies=USER)
 app.include_router(agent2_router, dependencies=USER)
 app.include_router(agent3_router, dependencies=USER)
+# The cold caller's desk — the one router his account can reach. Its own
+# routes check the role again for anything only the CEO may do (queueing).
+app.include_router(call_router, dependencies=AUTHED)
 # Delivery webhooks are called by Brevo, which cannot present a login, so this
 # router is mounted WITHOUT the user guard. It authenticates via a secret in
 # the URL path instead (see agent3_routes._webhook_secret).

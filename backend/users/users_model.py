@@ -8,7 +8,9 @@ from pydantic import BaseModel, Field
 
 import re
 
-ROLES = ["admin", "user"]
+# "caller" is a cold caller: he can reach the WhatsApp call desk and
+# nothing else. Enforced by auth.deps.require_staff on every other router.
+ROLES = ["admin", "user", "caller"]
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
