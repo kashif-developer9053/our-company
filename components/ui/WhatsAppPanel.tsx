@@ -68,6 +68,10 @@ export default function WhatsAppPanel() {
   const [draft, setDraft] = useState("");
   const [link, setLink] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
+  // Leads handed to the cold caller this session, so the button can confirm
+  // without a full reload.
+  const [queuing, setQueuing] = useState<string | null>(null);
+  const [queued, setQueued] = useState<Set<string>>(new Set());
   const [msg, setMsg] = useState<string | null>(null);
 
   const load = useCallback(async (f: string) => {
@@ -138,6 +142,18 @@ export default function WhatsAppPanel() {
 
   const desktopLink = (l: WhatsAppLead) =>
     `whatsapp://send?phone=${l.number}&text=${encodeURIComponent(draft)}`;
+
+  const sendToCalls = async (l: api.WhatsAppLead) => {
+    setQueuing(l.id);
+    try {
+      const r = await api.queueForCall(l.id);
+      if (r.ok) {
+        setQueued(new Set([...queued, l.id]));
+        setMsg(`✓ ${l.business_name} call list mein add ho gaya`);
+      } else setMsg(`⚠ ${r.error || "Could not add to the call list."}`);
+    } catch (e) { setMsg(`⚠ ${(e as Error).message}`); }
+    finally { setQueuing(null); }
+  };
 
   const openWhatsApp = async (l: WhatsAppLead) => {
     if (useDesktop) {
@@ -329,6 +345,13 @@ export default function WhatsAppPanel() {
                             onClick={() => prepare(l)}>Rewrite</button>
                           <button className="btn-mini" onClick={() => setStatus(l, "message_sent")}>
                             ✓ Mark sent
+                          </button>
+                          {/* Hand this lead to the cold caller. It stays on
+                              this desk too — same lead, worked two ways. */}
+                          <button className="btn-mini" disabled={queuing === l.id}
+                            title="Add this lead to the cold caller's list"
+                            onClick={() => sendToCalls(l)}>
+                            {queued.has(l.id) ? "✓ On call list" : "📞 Send to call list"}
                           </button>
                         </div>
                       </div>

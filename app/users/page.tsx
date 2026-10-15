@@ -79,7 +79,7 @@ export default function UsersPage() {
             <input className="af-input" placeholder="Name *" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
             <input className="af-input" placeholder="Email *" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
             <select className="af-input" value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>
-              <option value="user">User</option><option value="admin">Admin</option>
+              <option value="user">User</option><option value="admin">Admin</option><option value="caller">Cold caller (call desk only)</option>
             </select>
             <input className="af-input" type="password" placeholder="Password (blank = auto-generate)" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
           </div>
@@ -111,7 +111,7 @@ export default function UsersPage() {
                   <td>{editing?.id === u.id ? <input className="af-input" value={editing.name} onChange={(e) => setEditing({ ...editing, name: e.target.value })} /> : <span className="lead-name">{u.name}{u.id === me?.id ? " (you)" : ""}</span>}</td>
                   <td>{editing?.id === u.id ? <input className="af-input" value={editing.email} onChange={(e) => setEditing({ ...editing, email: e.target.value })} /> : u.email}</td>
                   <td>{editing?.id === u.id ? (
-                    <select className="af-input" value={editing.role} onChange={(e) => setEditing({ ...editing, role: e.target.value })}><option value="user">user</option><option value="admin">admin</option></select>
+                    <select className="af-input" value={editing.role} onChange={(e) => setEditing({ ...editing, role: e.target.value })}><option value="user">user</option><option value="admin">admin</option><option value="caller">caller</option></select>
                   ) : <span className="lead-badge" style={{ color: u.role === "admin" ? "#f2c14e" : "#8a93a6", borderColor: u.role === "admin" ? "#f2c14e" : "#8a93a6" }}>{u.role}</span>}</td>
                   <td>{u.is_active ? <span style={{ color: "#7ee0a2" }}>Active</span> : <span style={{ color: "#ef8f8f" }}>Disabled</span>}</td>
                   <td className="muted">{u.last_login || "—"}</td>

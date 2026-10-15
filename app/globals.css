@@ -1743,3 +1743,117 @@ body {
   margin: 0 4px 4px 0;
   cursor: pointer;
 }
+
+/* ---- Cold caller's desk -------------------------------------------------
+   Built for someone non-technical working mid-call: large tap targets, one
+   lead expanded at a time, and colour that means the same thing everywhere
+   (green = progress, amber = try again, red = closed). */
+.caller-shell { min-height: 100vh; background: #0b0f14; }
+.caller-bar {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 18px; border-bottom: 1px solid #1b2733; background: #0e141b;
+  position: sticky; top: 0; z-index: 20;
+}
+.caller-brand { display: flex; align-items: center; gap: 9px; color: #d6dde8; font-size: 15px; }
+.caller-dot { width: 9px; height: 9px; border-radius: 50%; background: #8fe000; }
+.caller-right { display: flex; gap: 8px; }
+.caller-main { padding: 18px; max-width: 900px; margin: 0 auto; }
+
+.call-desk h1 { font-size: 20px; margin: 0 0 2px; color: #e6ecf3; }
+.call-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.call-toggle { font-size: 12px; color: #8a93a6; display: flex; align-items: center; gap: 6px; }
+
+/* Numbers he checks between calls. The two he acts on are twice the size. */
+.call-stats {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 8px; margin: 14px 0 18px;
+}
+.call-stat {
+  background: rgba(255,255,255,0.02); border: 1px solid #1f2b38;
+  border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 2px;
+}
+.call-stat.big { grid-column: span 2; }
+.call-stat-v { font-size: 22px; font-weight: 700; color: #d6dde8; line-height: 1.1; }
+.call-stat.big .call-stat-v { font-size: 30px; }
+.call-stat-l { font-size: 11px; color: #7d8695; }
+.call-stat.good .call-stat-v { color: #8fe000; }
+.call-stat.warn .call-stat-v { color: #e0b341; }
+.call-stat.bad  .call-stat-v { color: #e06c6c; }
+
+.call-empty { text-align: center; padding: 50px 20px; color: #8a93a6; }
+.call-list { display: flex; flex-direction: column; gap: 8px; }
+
+.call-card { border: 1px solid #1f2b38; border-radius: 10px; background: #0e141b; overflow: hidden; }
+.call-card.open { border-color: #3c5a1c; }
+.call-card-head {
+  width: 100%; display: flex; justify-content: space-between; align-items: center;
+  gap: 12px; padding: 14px 16px; background: none; border: none; cursor: pointer; text-align: left;
+}
+.call-card-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.call-biz { font-size: 15px; color: #e6ecf3; font-weight: 600; }
+.call-card-side { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+.call-chevron { color: #5a6a80; }
+
+.call-pill { font-size: 11px; padding: 3px 10px; border-radius: 999px; border: 1px solid; white-space: nowrap; }
+.call-pill.neutral { color: #9aa6b6; border-color: #35475c; }
+.call-pill.good { color: #8fe000; border-color: #4a5c20; background: rgba(143,224,0,0.07); }
+.call-pill.warn { color: #e0b341; border-color: #5c4e20; background: rgba(224,179,65,0.07); }
+.call-pill.bad  { color: #e06c6c; border-color: #5c2525; background: rgba(224,108,108,0.07); }
+
+.call-body { padding: 0 16px 16px; display: flex; flex-direction: column; gap: 14px; }
+.call-sec { border-top: 1px solid #1b2733; padding-top: 12px; }
+.call-sec h3 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.4px; color: #7d8695; margin: 0 0 8px; }
+.call-sec summary { cursor: pointer; color: #7d8695; }
+
+.call-facts { display: grid; grid-template-columns: 110px 1fr; gap: 5px 10px; margin: 0; font-size: 13px; }
+.call-facts dt { color: #7d8695; }
+.call-facts dd { color: #d6dde8; margin: 0; }
+
+.call-sec.why p { font-size: 13.5px; color: #d6dde8; line-height: 1.6; margin: 0; }
+.call-note {
+  margin-top: 8px; font-size: 12px; color: #e0b341;
+  background: rgba(224,179,65,0.07); border: 1px solid #5c4e20;
+  border-radius: 7px; padding: 7px 10px;
+}
+
+/* The script. Said out loud, so it is set larger than normal UI text. */
+.call-step { display: flex; gap: 10px; margin-bottom: 11px; }
+.call-step-n {
+  flex-shrink: 0; width: 22px; height: 22px; border-radius: 50%;
+  background: rgba(143,224,0,0.1); border: 1px solid #4a5c20; color: #8fe000;
+  font-size: 11px; display: flex; align-items: center; justify-content: center;
+}
+.call-step-title { font-size: 11px; color: #7d8695; text-transform: uppercase; letter-spacing: 0.3px; }
+.call-say { font-size: 15px; color: #e6ecf3; line-height: 1.65; margin: 3px 0 0; }
+.call-step-note { font-size: 11.5px; color: #e0b341; margin: 4px 0 0; font-style: italic; }
+.call-closes { display: grid; gap: 10px; margin-top: 12px; }
+.call-closes strong { font-size: 11.5px; color: #7d8695; }
+.call-obj { margin-bottom: 11px; }
+.call-obj-q { font-size: 13px; color: #e0b341; margin-bottom: 3px; }
+.call-rules { margin: 0; padding-left: 18px; color: #9aa6b6; font-size: 12.5px; line-height: 1.9; }
+
+/* The action block: one big call button, then what happened. */
+.call-btn-main {
+  width: 100%; padding: 15px; font-size: 16px; font-weight: 600;
+  background: #8fe000; color: #0b0f14; border: none; border-radius: 9px;
+  cursor: pointer; margin-bottom: 14px;
+}
+.call-btn-main:hover:not(:disabled) { background: #a2f319; }
+.call-btn-main:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.call-status-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(125px, 1fr));
+  gap: 7px; margin-bottom: 14px;
+}
+.call-status-btn {
+  padding: 11px 8px; font-size: 13px; border-radius: 8px; cursor: pointer;
+  background: rgba(255,255,255,0.02); border: 1px solid #27384a; color: #9aa6b6;
+}
+.call-status-btn:hover:not(:disabled) { border-color: #3d5268; }
+.call-status-btn.on.neutral { border-color: #6f8296; color: #d6dde8; background: rgba(255,255,255,0.05); }
+.call-status-btn.on.good { border-color: #8fe000; color: #8fe000; background: rgba(143,224,0,0.1); }
+.call-status-btn.on.warn { border-color: #e0b341; color: #e0b341; background: rgba(224,179,65,0.1); }
+.call-status-btn.on.bad  { border-color: #e06c6c; color: #e06c6c; background: rgba(224,108,108,0.1); }
+
+.call-hist { margin-top: 12px; }
+.call-hist-row { padding: 5px 0; border-bottom: 1px solid #16202b; font-size: 12.5px; color: #9aa6b6; }

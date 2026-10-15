@@ -709,3 +709,54 @@ export interface ITHealth {
 }
 export const getItStatus = () => req<{ health: ITHealth }>("/it-monitor/status").then((r) => r.health);
 export const runItCheck = () => req<{ health: ITHealth }>("/it-monitor/check", { method: "POST" }).then((r) => r.health);
+
+// ---- WhatsApp CALL outreach (the cold caller's desk) ----------------------
+// A messaged lead can be pushed onto a call queue. It stays on the WhatsApp
+// desk too — same lead, worked two ways.
+export interface CallScriptStep { n: number; title: string; say: string; note?: string }
+export interface CallScript {
+  language: string;
+  already_messaged: boolean;
+  steps: CallScriptStep[];
+  extra_service: string;
+  close_interested: string;
+  close_not_interested: string;
+  objections: { q: string; a: string }[];
+  rules: string[];
+}
+export interface CallLead {
+  id: string; business_name: string; niche: string; city: string; country: string;
+  phone: string; number: string; website: string;
+  purposes: string[]; why: string;
+  rating?: number | null; reviews_count?: number | null;
+  source: string; collected_at: string;
+  message_status: string; message_sent_at: string; message_text: string;
+  status: string; remarks: string; calls_made: number;
+  last_call_at: string; queued_at: string;
+  history: { at: string; by?: string; status?: string; remarks?: string; called?: boolean }[];
+  script: CallScript;
+  wa_call_link: string;
+  opportunity_score?: number;
+}
+export interface CallStatusOption { key: string; label: string; tone: string }
+export interface CallStats {
+  day: string; total: number; open: number; calls_today: number;
+  by_status: Record<string, number>;
+  labels: Record<string, string>; tones: Record<string, string>;
+}
+export const getCallQueue = (status = "open") =>
+  req<{ ok: boolean; leads: CallLead[]; stats: CallStats; statuses: CallStatusOption[]; error?: string }>(
+    `/calls/queue?status=${encodeURIComponent(status)}`);
+export const queueForCall = (lead_id: string) =>
+  req<{ ok: boolean; message?: string; error?: string }>("/calls/queue", {
+    method: "POST", body: JSON.stringify({ lead_id }) });
+export const unqueueFromCall = (lead_id: string) =>
+  req<{ ok: boolean; message?: string; error?: string }>("/calls/unqueue", {
+    method: "POST", body: JSON.stringify({ lead_id }) });
+export const updateCallLead = (body: {
+  lead_id: string; status?: string; remarks?: string; logged_call?: boolean;
+}) =>
+  req<{ ok: boolean; message?: string; error?: string }>("/calls/update", {
+    method: "POST", body: JSON.stringify(body) });
+export const getCallStats = () =>
+  req<{ ok: boolean } & CallStats>("/calls/stats");
