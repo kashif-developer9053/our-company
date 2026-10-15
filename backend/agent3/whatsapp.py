@@ -252,6 +252,9 @@ def serialize(lead: dict) -> dict:
         # pressing send.
         "purpose": _purpose_label(lead),
         "purposes": lead.get("purposes") or [],
+        # Already handed to the cold caller? The button has to survive a
+        # refresh, or the CEO queues the same lead twice.
+        "on_call_list": bool((lead.get("call_outreach") or {}).get("queued_at")),
         # yes / no / unknown / "" when never checked. "no" for a landline is
         # decided locally and costs nothing.
         # A recorded verification wins; otherwise fall back to what the number

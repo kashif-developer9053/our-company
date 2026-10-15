@@ -346,13 +346,6 @@ export default function WhatsAppPanel() {
                           <button className="btn-mini" onClick={() => setStatus(l, "message_sent")}>
                             ✓ Mark sent
                           </button>
-                          {/* Hand this lead to the cold caller. It stays on
-                              this desk too — same lead, worked two ways. */}
-                          <button className="btn-mini" disabled={queuing === l.id}
-                            title="Add this lead to the cold caller's list"
-                            onClick={() => sendToCalls(l)}>
-                            {queued.has(l.id) ? "✓ On call list" : "📞 Send to call list"}
-                          </button>
                         </div>
                       </div>
                     )}
@@ -413,6 +406,19 @@ export default function WhatsAppPanel() {
                         </button>
                       ))}
                     </div>
+                    {/* Hand this lead to the cold caller. Lives on the ROW,
+                        not inside the message draft: a lead worth phoning is
+                        often one you never want to write to, and burying this
+                        behind "write a message" made it unreachable. The lead
+                        stays on this desk either way — same lead, two ways. */}
+                    <button className={`btn-mini wa-callbtn${l.on_call_list || queued.has(l.id) ? " on" : ""}`}
+                      disabled={queuing === l.id || !l.usable}
+                      title={l.usable ? "Add to the cold caller's list"
+                                      : "No usable mobile number to call"}
+                      onClick={() => sendToCalls(l)}>
+                      {queuing === l.id ? "…"
+                        : (l.on_call_list || queued.has(l.id)) ? "✓ On call list" : "📞 Call list"}
+                    </button>
                   </td>
                 </tr>
               ))}

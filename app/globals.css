@@ -1857,3 +1857,13 @@ body {
 
 .call-hist { margin-top: 12px; }
 .call-hist-row { padding: 5px 0; border-bottom: 1px solid #16202b; font-size: 12.5px; color: #9aa6b6; }
+
+/* "Send to call list" on a WhatsApp row. Distinct from the language buttons
+   beside it, because it is a different action: that lead goes to a person,
+   not into a message. */
+.wa-callbtn { margin-top: 5px; width: 100%; }
+.wa-callbtn.on {
+  border-color: #4a5c20;
+  background: rgba(143, 224, 0, 0.1);
+  color: #8fe000;
+}

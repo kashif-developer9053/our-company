@@ -1152,6 +1152,7 @@ async def whatsapp_leads(status: str = "all", only_usable: bool = True, limit: i
         # What we are selling them. The desk shows this instead of the website
         # fault, so it has to survive the projection.
         "purposes": 1,
+        "call_outreach.queued_at": 1,
         "wa_verified": 1,
     }
     out: list[dict] = []

@@ -469,6 +469,8 @@ export interface WhatsAppLead {
   // What we are selling them — what the message will actually pitch.
   purpose?: string;
   purposes?: string[];
+  // Already on the cold caller's list.
+  on_call_list?: boolean;
   created_at?: string;
   // yes | no | unknown | "" (never checked)
   has_whatsapp?: string;
