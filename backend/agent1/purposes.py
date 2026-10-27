@@ -113,7 +113,20 @@ _NICHE_SIGNALS: tuple[tuple[str, str], ...] = (
 
 # Website faults that justify a website pitch. Cosmetic findings never do:
 # nobody commissions a new site because a meta tag is missing.
-_WEBSITE_FAULTS = {"no_website", "site_unreachable", "http_error"}
+#
+# These are the auditor's CRITICAL codes — the ones a business owner can be
+# shown and will recognise as broken. The set used to hold only the three
+# "site does not load" codes, so a site that loaded but was unusable on a
+# phone, served no HTTPS, or took half a minute got no website pitch at all,
+# even when the auditor had already qualified it as needing a rebuild.
+_WEBSITE_FAULTS = {
+    "no_website", "site_unreachable", "http_error",
+    "not_mobile_friendly",   # most traffic here is mobile
+    "no_https",              # browsers now show "Not secure"
+    "very_slow",             # visitors leave before it paints
+    "no_title",              # nothing usable for Google to show
+    "no_contact_route",      # a site nobody can enquire through
+}
 
 # Enough of an online presence to imply enquiries are already arriving, which
 # is what makes a CRM or booking pitch land rather than sound invented.
@@ -199,11 +212,26 @@ def brief(purposes: list[str], lead: dict) -> str:
     if rating and reviews:
         evidence.append(f"{rating} stars from {reviews} Google reviews")
     elif reviews:
-        evidence.append(f"{reviews} Google reviews")
+        evidence.append(f"{reviews} Google review" + ("s" if reviews != 1 else ""))
     if not (lead.get("website") or "").strip():
         evidence.append("no website at all")
-    elif {f.get("code") for f in (lead.get("site_audit") or {}).get("findings", [])} & _WEBSITE_FAULTS:
-        evidence.append("their website does not load")
+    else:
+        codes = {f.get("code") for f in (lead.get("site_audit") or {}).get("findings", [])}
+        # Say what is actually wrong. _WEBSITE_FAULTS now covers sites that
+        # load but are unusable, and telling an owner their working site
+        # "does not load" loses the call in one sentence.
+        if codes & {"site_unreachable", "http_error"}:
+            evidence.append("their website does not load")
+        elif "not_mobile_friendly" in codes:
+            evidence.append("their website does not work properly on a phone")
+        elif "no_https" in codes:
+            evidence.append("their website shows a \"Not secure\" warning")
+        elif "very_slow" in codes:
+            evidence.append("their website takes too long to open")
+        elif "no_contact_route" in codes:
+            evidence.append("their website gives no way to contact them")
+        elif "no_title" in codes:
+            evidence.append("their website shows no proper title in Google")
 
     # The website hook has two quite different shapes, and using the wrong one
     # is immediately obvious to the reader: telling a business with a broken
@@ -250,7 +278,7 @@ def reason_line(purposes: list[str], lead: dict) -> str:
             bits.append("site returns an error")
     reviews = lead.get("reviews_count")
     if reviews:
-        bits.append(f"{reviews} reviews")
+        bits.append(f"{reviews} review" + ("s" if reviews != 1 else ""))
     facts = "; ".join(bits)
     names = ", ".join(label(p) for p in purposes)
     return f"Collected for {names}" + (f" — {facts}." if facts else ".")

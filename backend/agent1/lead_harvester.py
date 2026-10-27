@@ -99,7 +99,14 @@ def _stamp_purpose(lead: dict, service: str) -> None:
     reason = purpose_reason(purposes, lead)
     # A website lead keeps the auditor's own summary, which names the actual
     # fault; for everything else the auditor has nothing useful to say.
-    if is_website_service(service) and (lead.get("site_audit") or {}).get("summary"):
+    #
+    # "Website hunt" is the service asked for, not necessarily what this lead
+    # was kept for. A business with a sound site is now kept when we can sell
+    # it something else, and handing it the audit summary labelled that lead
+    # with a site fault it does not have — the exact mislabelling `purposes`
+    # exists to prevent. Only use the audit when website really is the pitch.
+    if (is_website_service(service) and purposes[:1] == ["website"]
+            and (lead.get("site_audit") or {}).get("summary")):
         lead["collection_reason"] = lead["site_audit"]["summary"]
     elif reason:
         lead["collection_reason"] = reason

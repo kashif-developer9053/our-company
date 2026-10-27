@@ -134,7 +134,20 @@ def qualifies(service: str, lead: dict) -> tuple[bool, str]:
         audit = lead.get("site_audit") or {}
         if audit.get("qualified"):
             return True, ""
-        return False, "website is fine — nothing to sell them"
+        # A sound website is not a reason to throw the business away. We sell
+        # six other things, and the businesses that invested in a good site
+        # are the ones that invest. Rejecting them here is why a hunt for
+        # "furniture makers in Murree" came back with almost nothing: every
+        # maker with a working site was discarded as "nothing to sell them",
+        # while needing exactly the stock system we build.
+        #
+        # So ask the real question — is there anything we can honestly sell
+        # them? — and keep the lead for THAT, stating the true reason.
+        from .purposes import PURPOSES, diagnose
+        other = [p for p in diagnose(lead) if p != "website"]
+        if other:
+            return True, f"site is fine, but {PURPOSES[other[0]]['hook']}"
+        return False, "website is fine, and nothing else we sell fits them"
 
     reviews = lead.get("reviews_count")
     if isinstance(reviews, int):
