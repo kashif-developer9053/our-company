@@ -560,6 +560,17 @@ export interface HuntStatus {
 export const getHuntStatus = (runId: string) =>
   req<HuntStatus>(`/agent1/hunt-status/${encodeURIComponent(runId)}`);
 
+// Call off a running hunt. Leads already qualified are still staged for
+// review — stopping takes what is there rather than discarding it.
+export const stopHunt = (runId: string) =>
+  req<{ ok: boolean; status?: string; message?: string; error?: string }>(
+    `/agent1/stop-hunt/${encodeURIComponent(runId)}`, { method: "POST" });
+
+// Every running hunt at once, for when one is wedged from an earlier session.
+export const stopAllHunts = () =>
+  req<{ ok: boolean; stopped?: number; message?: string; error?: string }>(
+    "/agent1/stop-all-hunts", { method: "POST" });
+
 // What we are selling decides how a lead is judged. Website work is found by
 // auditing a site; CRM/ERP/booking cannot be — a business with a perfect site
 // may still run its stock on paper — so those are targeted by industry.

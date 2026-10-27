@@ -46,6 +46,10 @@ export default function LeadHunter({ onDone }: { onDone?: () => void }) {
   // WhatsApp campaign fills the desk with numbers nobody can message.
   const [contact, setContact] = useState<"both" | "email" | "whatsapp">("both");
   const [services, setServices] = useState<api.ServiceTarget[]>([]);
+  // The hunt currently running, so it can be called off. Before this the
+  // only way to stop a hunt was restarting the API.
+  const [runId, setRunId] = useState<string | null>(null);
+  const [stopping, setStopping] = useState(false);
   useEffect(() => {
     api.getServices().then((r) => setServices(r.services ?? [])).catch(() => {});
   }, []);
@@ -98,7 +102,9 @@ export default function LeadHunter({ onDone }: { onDone?: () => void }) {
       // after 600s and a hunt can run far longer, which was the 504. Poll
       // until it finishes instead of holding the connection open.
       if (r.run_id) {
-        await pollHunt(r.run_id, n);
+        setRunId(r.run_id);
+        try { await pollHunt(r.run_id, n); }
+        finally { setRunId(null); setStopping(false); }
         return;
       }
       setResult({
@@ -113,6 +119,16 @@ export default function LeadHunter({ onDone }: { onDone?: () => void }) {
       onDone?.();
     } catch (e) { setErr((e as Error).message); }
     finally { setBusy(false); }
+  };
+
+  const stop = async () => {
+    if (!runId || stopping) return;
+    setStopping(true);
+    try {
+      const r = await api.stopHunt(runId);
+      if (!r.ok) setErr(r.error || "Could not stop the hunt.");
+      else setLive(r.message || "Stopping…");
+    } catch (e) { setErr((e as Error).message); setStopping(false); }
   };
 
   const pollHunt = async (runId: string, n: string) => {
@@ -265,6 +281,17 @@ export default function LeadHunter({ onDone }: { onDone?: () => void }) {
           <span className="spinner" /> Agent 1 is searching, checking contacts and auditing websites.
           This can take several minutes for large targets.
           {live && <div className="hunt-live">{live}</div>}
+          {runId && (
+            <div className="hunt-stoprow">
+              <button type="button" className="btn-mini danger"
+                      onClick={stop} disabled={stopping}>
+                {stopping ? "Stopping…" : "Stop this hunt"}
+              </button>
+              <span className="muted small">
+                Leads already found are kept — stopping does not throw them away.
+              </span>
+            </div>
+          )}
         </div>
       )}
 

@@ -98,12 +98,19 @@ _now_iso = _now
 _HUNT_RUNS: dict[str, dict] = {}
 
 
+# The asyncio task behind each run, so a hunt can be cancelled. Parallel to
+# _HUNT_RUNS rather than inside it because that dict is returned to the UI as
+# JSON, and a Task is not serialisable.
+_HUNT_TASKS: dict[str, "asyncio.Task"] = {}
+
+
 def _hunt_runs() -> dict[str, dict]:
     # Keep the most recent handful so a page refresh can still find the run.
     if len(_HUNT_RUNS) > 20:
         for key in sorted(_HUNT_RUNS,
                           key=lambda k: _HUNT_RUNS[k].get("started_at", ""))[:10]:
             _HUNT_RUNS.pop(key, None)
+            _HUNT_TASKS.pop(key, None)
     return _HUNT_RUNS
 
 
@@ -295,6 +302,55 @@ class HarvestBody(BaseModel):
     contact: str = "both"
 
 
+@router.post("/stop-hunt/{run_id}")
+@safe_endpoint("agent1")
+async def stop_hunt(run_id: str):
+    """Call off a running hunt.
+
+    Leads already found are NOT lost: whatever the hunt had qualified before
+    the stop is staged as a pending batch, exactly as a finished hunt would.
+    Stopping is a decision to take what is there, not to throw it away.
+    """
+    run = _hunt_runs().get(run_id)
+    if not run:
+        return {"ok": False, "error": "That hunt is not running — it may have "
+                                      "already finished, or the API restarted."}
+    if run.get("status") != "running":
+        return {"ok": True, "status": run.get("status"),
+                "message": "That hunt has already finished."}
+
+    task = _HUNT_TASKS.get(run_id)
+    if task is None or task.done():
+        run["status"] = "stopped"
+        run["message"] = "Hunt stopped."
+        return {"ok": True, "status": "stopped", "message": "Hunt stopped."}
+
+    # Mark it before cancelling: _run_hunt's handler reads this to tell a
+    # deliberate stop apart from a crash.
+    run["stop_requested"] = True
+    task.cancel()
+    return {"ok": True, "status": "stopping",
+            "message": "Stopping the hunt — leads already found will be kept."}
+
+
+@router.post("/stop-all-hunts")
+@safe_endpoint("agent1")
+async def stop_all_hunts():
+    """Call off every running hunt. The panic button."""
+    stopped = []
+    for rid, run in list(_hunt_runs().items()):
+        if run.get("status") != "running":
+            continue
+        run["stop_requested"] = True
+        task = _HUNT_TASKS.get(rid)
+        if task is not None and not task.done():
+            task.cancel()
+        stopped.append(rid)
+    return {"ok": True, "stopped": len(stopped), "run_ids": stopped,
+            "message": (f"Stopping {len(stopped)} running hunt(s)."
+                        if stopped else "No hunts are running.")}
+
+
 @router.get("/hunt-status/{run_id}")
 @safe_endpoint("agent1")
 async def hunt_status(run_id: str):
@@ -418,7 +474,11 @@ async def harvest_leads_route(body: HarvestBody):
         "message": f"Hunting {target} qualified leads: {what}",
         "started_at": _now_iso(),
     }
-    asyncio.create_task(_run_hunt(run_id, body, target, already, where, exclude))
+    # Keep the task handle. Discarding it meant a hunt could not be called
+    # off once started: the only way to stop one was restarting the API, which
+    # takes the whole app down with it.
+    _HUNT_TASKS[run_id] = asyncio.create_task(
+        _run_hunt(run_id, body, target, already, where, exclude))
     return {"ok": True, "run_id": run_id, "status": "running", "mode": mode,
             "message": (f"Hunting {target} qualified leads: {what}. "
                         f"This runs in the background and can take several minutes — "
@@ -484,6 +544,7 @@ async def _hunt_across_niches(body: "HarvestBody", target: int, where: str,
     searched: list[str] = []
     too_big = 0
 
+    cancelled = False
     for i, niche in enumerate(niches, 1):
         if len(leads) >= target:
             break
@@ -500,6 +561,12 @@ async def _hunt_across_niches(body: "HarvestBody", target: int, where: str,
                 sweep=(mode == "area"),
                 contact=body.contact,
             )
+        except asyncio.CancelledError:
+            # The CEO pressed stop. Keep what has already been qualified —
+            # throwing away a half-finished hunt's leads would make stopping
+            # something you avoid doing, which defeats the button.
+            cancelled = True
+            break
         except Exception as exc:  # noqa: BLE001 - one dead niche never ends a sweep
             log.error("Niche '%s' failed (isolated): %s", niche, exc)
             continue
@@ -549,7 +616,7 @@ async def _hunt_across_niches(body: "HarvestBody", target: int, where: str,
 
     return {"leads": leads[:target], "examined": examined, "rounds": rounds,
             "elapsed": 0, "rejected": rejected, "niches_searched": searched,
-            "mode": mode}
+            "mode": mode, "cancelled": cancelled}
 
 
 async def _run_hunt(run_id: str, body: "HarvestBody", target: int, already: int,
@@ -574,6 +641,17 @@ async def _run_hunt(run_id: str, body: "HarvestBody", target: int, already: int,
     try:
         result = await _hunt_across_niches(
             body, target, where, exclude, progress)
+    except asyncio.CancelledError:
+        # Cancellation can land here rather than inside the niche walk,
+        # depending on which await was running when stop was pressed. The
+        # walk's own leads are unreachable from here, so this path records
+        # the stop honestly rather than reporting a crash.
+        _set_status("idle")
+        runs[run_id] = {**runs.get(run_id, {}), "status": "stopped", "added": 0,
+                        "message": "Hunt stopped before any leads were staged.",
+                        "finished_at": _now_iso()}
+        log.info("Hunt %s cancelled by the CEO", run_id)
+        return
     except Exception as exc:  # noqa: BLE001
         _set_status("error", f"Lead hunt failed: {exc}")
         log.error("Harvest failed (isolated): %s", exc)
@@ -581,11 +659,17 @@ async def _run_hunt(run_id: str, body: "HarvestBody", target: int, already: int,
                         "message": f"Lead hunt failed: {exc}", "finished_at": _now_iso()}
         return
 
+    stopped = bool(result.get("cancelled") or runs.get(run_id, {}).get("stop_requested"))
+
     leads = result["leads"]
     if not leads:
         _set_status("idle")
-        runs[run_id] = {**runs.get(run_id, {}), "status": "done", "added": 0,
+        runs[run_id] = {**runs.get(run_id, {}),
+                        "status": "stopped" if stopped else "done", "added": 0,
                         "batch_id": "", **result, "finished_at": _now_iso(),
+                        "message": ("Hunt stopped — nothing had qualified yet."
+                                    if stopped else
+                                    runs.get(run_id, {}).get("message", "")),
                         "next_options": _next_options(body.niche, result)}
         return
 
@@ -609,7 +693,13 @@ async def _run_hunt(run_id: str, body: "HarvestBody", target: int, already: int,
         agent_id="agent1", action="leads_pending", ref_id=batch_id,
     )
     _set_status("idle")
-    runs[run_id] = {**runs.get(run_id, {}), "status": "done",
+    runs[run_id] = {**runs.get(run_id, {}),
+                    "status": "stopped" if stopped else "done",
+                    # Without this the last progress line survives, so a
+                    # stopped hunt still reads "still searching...".
+                    "message": (f"Hunt stopped — keeping the {stored['added']} "
+                                f"leads found so far." if stopped else
+                                f"{stored['added']} leads ready for review."),
                     "batch_id": batch_id, **stored, **result,
                     "already_held": already,
                     "niche_total": already + len(leads),

@@ -1529,6 +1529,13 @@ body {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
+/* Calling off a running hunt. The reassurance sits beside the button
+   because the reason people avoid pressing stop is fear of losing work. */
+.hunt-stoprow {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin-top: 10px;
+}
+
 /* Contact column in the CRM table. Most leads are phone-only, so the
    distinction has to be readable at a glance. */
 .lead-contact { max-width: 220px; }
