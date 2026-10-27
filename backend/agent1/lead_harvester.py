@@ -249,13 +249,34 @@ _PER_ROUND = 40
 # it: a Maps scrape that hung took the whole hunt with it, and the CEO watched
 # "Round 1: searching..." for thirty minutes. Each source now gets a ceiling,
 # and a source that exceeds it is abandoned so the next template can run.
-_SOURCE_TIMEOUT = 180  # seconds for one source in one round
+# 180s was still far too patient. Three sources run per round, so one round
+# could legitimately take 9 minutes of total silence while the screen showed a
+# single unchanged "Round N: searching..." line. A Maps scrape that is working
+# finishes in well under a minute; one still going at 75s is wedged, not slow.
+_SOURCE_TIMEOUT = 75   # seconds for one source in one round
+
+# A whole round, all sources together. Even with each source under its own
+# ceiling the round as a whole has to be bounded, or a slow-but-not-timing-out
+# source on every one of 28 templates adds up to the full hour.
+_ROUND_TIMEOUT = 150
 
 # Below this many qualified leads a run is considered "thin" and tolerates far
 # more empty rounds before giving up — the point at which persistence is worth
 # most is precisely when little has been found.
 _PERSIST_UNTIL = 20
-_BARREN_LIMIT_THIN = 12
+# 12 was tuned for a city, where a barren round means "this phrasing missed"
+# and the next template may still deliver. In a small town — Skardu has a few
+# dozen hotels in total — barren means the place is genuinely exhausted, and
+# sitting through 12 more rounds to prove it is how a hunt ran for an hour
+# with nothing to show. Six is still stubborn enough to get past a couple of
+# unlucky phrasings.
+_BARREN_LIMIT_THIN = 6
+
+# A town is exhausted when searches keep returning businesses already seen.
+# Once the first source in a round surfaces nothing new, running the other two
+# over the same place usually costs minutes to find the same nothing — so the
+# round is cut short and the next template tried instead.
+_SKIP_EXTRA_SOURCES_WHEN_BARREN = True
 
 # A hunt returning fewer than this has not really answered the question, so it
 # escalates to nearby-area searches before reporting back.
@@ -441,7 +462,15 @@ async def harvest_leads(
                 scrape_google_maps(query, max_results=_PER_ROUND),
                 timeout=_SOURCE_TIMEOUT)
             if maps.get("ok"):
-                fresh.extend(maps.get("leads", []))
+                got = maps.get("leads", [])
+                fresh.extend(got)
+                new_here = sum(1 for l in got if _lead_key(l)
+                               and _lead_key(l) not in exclude
+                               and _lead_key(l) not in pool)
+                say(f"Round {rounds_run}: Maps returned {len(got)} "
+                    f"({new_here} new)")
+            elif maps.get("blocked"):
+                say(f"Round {rounds_run}: Google is rate-limiting us — pausing this source.")
         except asyncio.TimeoutError:
             say(f"Round {rounds_run}: Maps took too long — moving on.")
         except Exception as exc:  # noqa: BLE001 - one source failing is survivable
@@ -456,8 +485,18 @@ async def harvest_leads(
         #    businesses of unknown size, no trade, and mostly the weakest
         #    pitch we have. There are 30 area queries to work through instead,
         #    each returning real Maps data.
-        if not sweep:
+        # Maps found nothing we had not already seen. The crawler and the
+        # social search ask the same question of the same small town, and
+        # cost minutes to return the same nothing — so skip them and try the
+        # next phrasing instead. This is what turned a dead town into an
+        # hour of silence.
+        maps_was_barren = bool(fresh) and not any(
+            _lead_key(l) and _lead_key(l) not in exclude and _lead_key(l) not in pool
+            for l in fresh)
+
+        if not sweep and not (maps_was_barren and _SKIP_EXTRA_SOURCES_WHEN_BARREN):
             try:
+                say(f"Round {rounds_run}: checking published websites…")
                 mined = await asyncio.wait_for(
                     mine_business_websites(query, max_results=_PER_ROUND),
                     timeout=_SOURCE_TIMEOUT)
@@ -474,8 +513,10 @@ async def harvest_leads(
         #    engines throttle quickly.
         # A sweep has no trade to search social for, and "business in Sialkot"
         # on Facebook returns pages, not businesses.
-        if rounds_run == 1 and not sweep:
+        if (rounds_run == 1 and not sweep
+                and not (maps_was_barren and _SKIP_EXTRA_SOURCES_WHEN_BARREN)):
             try:
+                say("Checking businesses that only have a Facebook page…")
                 social = await asyncio.wait_for(
                     discover_social_businesses(niche, where, max_results=_PER_ROUND),
                     timeout=_SOURCE_TIMEOUT)
@@ -511,7 +552,13 @@ async def harvest_leads(
 
         # 3) Find REAL published emails for the new candidates.
         try:
-            await enrich_lead_emails(fresh, concurrency=8)
+            say(f"Round {rounds_run}: looking up contact details for "
+                f"{len(fresh)} businesses…")
+            await asyncio.wait_for(enrich_lead_emails(fresh, concurrency=8),
+                                   timeout=_SOURCE_TIMEOUT)
+        except asyncio.TimeoutError:
+            say(f"Round {rounds_run}: contact lookup took too long — "
+                f"keeping what it found.")
         except Exception as exc:  # noqa: BLE001
             log.error("Enrichment failed (isolated): %s", exc)
 
@@ -520,8 +567,14 @@ async def harvest_leads(
         #    which the purpose diagnosis needs — so it must not also claim the
         #    collection reason.
         try:
-            await audit_leads(fresh, concurrency=_AUDIT_CONCURRENCY,
-                              set_reason=is_website_service(service))
+            say(f"Round {rounds_run}: checking {len(fresh)} websites…")
+            await asyncio.wait_for(
+                audit_leads(fresh, concurrency=_AUDIT_CONCURRENCY,
+                            set_reason=is_website_service(service)),
+                timeout=_SOURCE_TIMEOUT)
+        except asyncio.TimeoutError:
+            say(f"Round {rounds_run}: website checks took too long — "
+                f"keeping what finished.")
         except Exception as exc:  # noqa: BLE001
             log.error("Audit failed (isolated): %s", exc)
 
