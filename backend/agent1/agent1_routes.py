@@ -351,6 +351,26 @@ async def stop_all_hunts():
                         if stopped else "No hunts are running.")}
 
 
+@router.get("/active-hunt")
+@safe_endpoint("agent1")
+async def active_hunt():
+    """The hunt currently running, if any.
+
+    A reload loses the run id, which lived only in the page's state — so the
+    leads page came back blank while a hunt was still going, and the only
+    sign of it was the dashboard's status line. This lets the page find its
+    own hunt again and resume following it.
+
+    Returns the most recently started running hunt; hunts are sequential in
+    practice, and the newest is the one the CEO just started.
+    """
+    running = [r for r in _hunt_runs().values() if r.get("status") == "running"]
+    if not running:
+        return {"ok": True, "running": False}
+    run = max(running, key=lambda r: r.get("started_at") or "")
+    return {"ok": True, "running": True, **run}
+
+
 @router.get("/hunt-status/{run_id}")
 @safe_endpoint("agent1")
 async def hunt_status(run_id: str):

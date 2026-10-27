@@ -544,7 +544,10 @@ export const harvestLeads = (body: {
 // the UI polls hunt-status. Nginx closes a proxied request after 600s, and a
 // hunt can legitimately run an hour — that mismatch was the 504.
 export interface HuntStatus {
-  ok: boolean; status?: "running" | "done" | "error";
+  ok: boolean; status?: "running" | "done" | "error" | "stopped";
+  // Present on a hunt the page is rejoining after a reload, so it can show
+  // what is being hunted without the form state that started it.
+  id?: string; niche?: string; where?: string; started_at?: string;
   message?: string; found?: number; target?: number; added?: number;
   rounds?: number; examined?: number; elapsed_seconds?: number;
   complete?: boolean; batch_id?: string; already_held?: number;
@@ -562,6 +565,11 @@ export const getHuntStatus = (runId: string) =>
 
 // Call off a running hunt. Leads already qualified are still staged for
 // review — stopping takes what is there rather than discarding it.
+// Is a hunt running right now? A page reload loses the run id, so this is
+// how the leads page finds its own hunt again instead of coming back blank.
+export const getActiveHunt = () =>
+  req<HuntStatus & { running?: boolean }>("/agent1/active-hunt");
+
 export const stopHunt = (runId: string) =>
   req<{ ok: boolean; status?: string; message?: string; error?: string }>(
     `/agent1/stop-hunt/${encodeURIComponent(runId)}`, { method: "POST" });

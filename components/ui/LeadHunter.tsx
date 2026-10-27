@@ -50,6 +50,9 @@ export default function LeadHunter({ onDone }: { onDone?: () => void }) {
   // only way to stop a hunt was restarting the API.
   const [runId, setRunId] = useState<string | null>(null);
   const [stopping, setStopping] = useState(false);
+  // Set only when the page rejoined a hunt it did not start, so the busy box
+  // can say what is being hunted — the form fields are empty after a reload.
+  const [resumed, setResumed] = useState<string>("");
   useEffect(() => {
     api.getServices().then((r) => setServices(r.services ?? [])).catch(() => {});
   }, []);
@@ -156,6 +159,33 @@ export default function LeadHunter({ onDone }: { onDone?: () => void }) {
       return;
     }
   };
+
+  // Rejoin a hunt that is already running. Everything the page knew about it
+  // — the run id, the spinner, the progress line — lived in state that a
+  // reload throws away, so the leads page came back looking idle while Agent
+  // 1 was still working. Only the dashboard, which reads the shared status
+  // board, showed any sign of it. Ask the backend what is running and pick
+  // the hunt back up, including its stop button.
+  useEffect(() => {
+    let on = true;
+    (async () => {
+      try {
+        const a = await api.getActiveHunt();
+        if (!on || !a.ok || !a.running || !a.id) return;
+        setBusy(true);
+        setRunId(a.id);
+        if (a.niche) setLastNiche(a.niche);
+        if (a.message) setLive(a.message);
+        setResumed(a.what || [a.niche, a.where].filter(Boolean).join(" in ") || "a hunt");
+        if (a.niche) setNiche(a.niche);
+        try { await pollHunt(a.id, a.niche || ""); }
+        finally { if (on) { setBusy(false); setRunId(null); setStopping(false); setResumed(""); } }
+      } catch { /* nothing running, or the API is down — leave the form idle */ }
+    })();
+    return () => { on = false; };
+    // Deliberately once, on mount: this is recovery, not a subscription.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const choose = (action: string) => {
     if (action === "stop") { setResult(null); return; }
@@ -278,8 +308,10 @@ export default function LeadHunter({ onDone }: { onDone?: () => void }) {
 
       {busy && (
         <div className="hunt-busy">
-          <span className="spinner" /> Agent 1 is searching, checking contacts and auditing websites.
-          This can take several minutes for large targets.
+          <span className="spinner" />{" "}
+          {resumed
+            ? `Agent 1 is still hunting: ${resumed}. This carried on while the page was closed.`
+            : "Agent 1 is searching, checking contacts and auditing websites. This can take several minutes for large targets."}
           {live && <div className="hunt-live">{live}</div>}
           {runId && (
             <div className="hunt-stoprow">
