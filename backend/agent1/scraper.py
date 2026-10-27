@@ -37,6 +37,7 @@ async def scrape_google_maps(query: str, max_results: int = 20) -> dict:
         return {"ok": False, "blocked": False, "message": f"Playwright not available: {exc}", "leads": []}
 
     leads: list[dict] = []
+    browser = None
     try:
         async with async_playwright() as pw:
             # --no-sandbox / --disable-dev-shm-usage are required on a headless
@@ -66,7 +67,6 @@ async def scrape_google_maps(query: str, max_results: int = 20) -> dict:
             # Block / unusual-traffic page?
             body_text = (await page.locator("body").inner_text())[:600].lower()
             if any(s in body_text for s in ("unusual traffic", "are you a robot", "captcha", "our systems have detected")):
-                await browser.close()
                 return {"ok": False, "blocked": True,
                         "message": "Scraping paused — possible rate limiting detected (Google challenge page).", "leads": []}
 
@@ -74,7 +74,6 @@ async def scrape_google_maps(query: str, max_results: int = 20) -> dict:
             try:
                 await feed.wait_for(timeout=12000)
             except Exception:  # noqa: BLE001
-                await browser.close()
                 if "google.com/maps" not in page.url:
                     return {"ok": False, "blocked": True, "message": "Scraping paused — redirected away from Maps (possible block).", "leads": []}
                 return {"ok": True, "blocked": False, "message": "No results feed found (0 businesses).", "leads": []}
@@ -119,11 +118,19 @@ async def scrape_google_maps(query: str, max_results: int = 20) -> dict:
                 except Exception as exc:  # noqa: BLE001 - skip one bad place, continue
                     log.warning("Skipping place '%s': %s", name[:40], exc)
 
-            await browser.close()
         return {"ok": True, "blocked": False, "message": f"Scraped {len(leads)} businesses.", "leads": leads}
     except Exception as exc:  # noqa: BLE001
         log.error("Scrape job failed: %s", exc)
         return {"ok": False, "blocked": False, "message": f"Scraping error: {exc}", "leads": []}
+    finally:
+        # A leaked Chromium is ~150MB that never comes back, and a hunt runs
+        # dozens of rounds. Closing only on the success paths is what walked
+        # the server's memory up until nothing could be served.
+        if browser is not None:
+            try:
+                await browser.close()
+            except Exception:  # noqa: BLE001
+                pass
 
 
 async def _extract_phone(page) -> str:

@@ -79,9 +79,23 @@ def resolve(mode: str, niche: str, service: str) -> str:
     the hunt.
     """
     mode = (mode or "").strip().lower()
-    if mode in MODES:
-        return mode
-    return "niche" if (niche or "").strip() else "purpose"
+    if mode not in MODES:
+        mode = "niche" if (niche or "").strip() else "purpose"
+
+    # A purpose hunt needs a list of business types that run on what we sell.
+    # "website" has no such list — anyone can need a website — so there is
+    # nothing to walk. That case used to stay "purpose" and hand the harvester
+    # a single empty niche, which formatted "{niche} in {where}" into
+    # " in Murree, Pakistan": a query asking Google Maps for nothing, run with
+    # sweep=False so even the size filters were wrong. Sweeping the place is
+    # what was always meant here, and it is what the docstring promises.
+    #
+    # This must be decided HERE rather than in plan(), because the caller
+    # derives the sweep flag from this function's answer. Fixing only plan()
+    # left it searching the right queries with the wrong gates.
+    if mode == "purpose" and not niches_for(service):
+        return "area"
+    return mode
 
 
 def plan(mode: str, niche: str, service: str, target: int) -> list[str]:

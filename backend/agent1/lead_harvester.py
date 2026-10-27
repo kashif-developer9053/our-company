@@ -237,6 +237,13 @@ _BARREN_LIMIT = 6
 # search returning 40 costs little more than one returning 20.
 _PER_ROUND = 40
 
+# No single search may run longer than this. The time budget above is only
+# tested BETWEEN rounds, so a round that never returns is never interrupted by
+# it: a Maps scrape that hung took the whole hunt with it, and the CEO watched
+# "Round 1: searching..." for thirty minutes. Each source now gets a ceiling,
+# and a source that exceeds it is abandoned so the next template can run.
+_SOURCE_TIMEOUT = 180  # seconds for one source in one round
+
 # Below this many qualified leads a run is considered "thin" and tolerates far
 # more empty rounds before giving up — the point at which persistence is worth
 # most is precisely when little has been found.
@@ -423,9 +430,13 @@ async def harvest_leads(
         fresh: list[dict] = []
         # 1) Google Maps (good for phone numbers + addresses)
         try:
-            maps = await scrape_google_maps(query, max_results=_PER_ROUND)
+            maps = await asyncio.wait_for(
+                scrape_google_maps(query, max_results=_PER_ROUND),
+                timeout=_SOURCE_TIMEOUT)
             if maps.get("ok"):
                 fresh.extend(maps.get("leads", []))
+        except asyncio.TimeoutError:
+            say(f"Round {rounds_run}: Maps took too long — moving on.")
         except Exception as exc:  # noqa: BLE001 - one source failing is survivable
             log.error("Maps round failed (isolated): %s", exc)
         # 2) Our own web crawler (good for published emails).
@@ -440,9 +451,13 @@ async def harvest_leads(
         #    each returning real Maps data.
         if not sweep:
             try:
-                mined = await mine_business_websites(query, max_results=_PER_ROUND)
+                mined = await asyncio.wait_for(
+                    mine_business_websites(query, max_results=_PER_ROUND),
+                    timeout=_SOURCE_TIMEOUT)
                 if mined.get("ok"):
                     fresh.extend(mined.get("leads", []))
+            except asyncio.TimeoutError:
+                say(f"Round {rounds_run}: web crawl took too long — moving on.")
             except Exception as exc:  # noqa: BLE001
                 log.error("Web mining round failed (isolated): %s", exc)
         # 3) Businesses that exist only on Facebook/Instagram. Maps and the web
@@ -454,11 +469,14 @@ async def harvest_leads(
         # on Facebook returns pages, not businesses.
         if rounds_run == 1 and not sweep:
             try:
-                social = await discover_social_businesses(
-                    niche, where, max_results=_PER_ROUND)
+                social = await asyncio.wait_for(
+                    discover_social_businesses(niche, where, max_results=_PER_ROUND),
+                    timeout=_SOURCE_TIMEOUT)
                 if social.get("ok") and social.get("leads"):
                     fresh.extend(social["leads"])
                     say(f"Social search added {len(social['leads'])} businesses with no website.")
+            except asyncio.TimeoutError:
+                say("Social search took too long — moving on.")
             except Exception as exc:  # noqa: BLE001
                 log.error("Social mining failed (isolated): %s", exc)
 
@@ -552,14 +570,18 @@ async def harvest_leads(
             say(f"Round {rounds_run} (widened): '{query}' ({len(qualified)}/{target})")
             wider: list[dict] = []
             try:
-                mres = await scrape_google_maps(query, max_results=_PER_ROUND)
+                mres = await asyncio.wait_for(
+                    scrape_google_maps(query, max_results=_PER_ROUND),
+                    timeout=_SOURCE_TIMEOUT)
                 if mres.get("ok"):
                     wider.extend(mres.get("leads", []))
             except Exception as exc:  # noqa: BLE001
                 log.error("Widened maps round failed (isolated): %s", exc)
             try:
                 if not sweep:
-                    wres = await mine_business_websites(query, max_results=_PER_ROUND)
+                    wres = await asyncio.wait_for(
+                        mine_business_websites(query, max_results=_PER_ROUND),
+                        timeout=_SOURCE_TIMEOUT)
                     if wres.get("ok"):
                         wider.extend(wres.get("leads", []))
             except Exception as exc:  # noqa: BLE001

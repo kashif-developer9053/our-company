@@ -916,6 +916,7 @@ async def _render_missing_contacts(results: list[Any]) -> int:
 
     rendered = 0
     public_hosts: dict[str, bool] = {}
+    browser = None
     try:
         async with async_playwright() as playwright:
             browser = await _launch_browser(playwright)
@@ -963,9 +964,16 @@ async def _render_missing_contacts(results: list[Any]) -> int:
                         log.debug("Browser fallback skipped %s: %s", original.url, exc)
                     finally:
                         await page.close()
-            await browser.close()
     except Exception as exc:  # noqa: BLE001
         log.warning("Browser contact fallback failed safely: %s", exc)
+    finally:
+        # Same leak as the Maps scraper: closing only on the success path left
+        # a Chromium behind every time a site hung or threw.
+        if browser is not None:
+            try:
+                await browser.close()
+            except Exception:  # noqa: BLE001
+                pass
     return rendered
 
 
