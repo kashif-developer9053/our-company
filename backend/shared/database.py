@@ -59,9 +59,19 @@ def _connect() -> None:
                 # compressors cut transfer size, which matters on a slow link.
                 client = MongoClient(
                     uri,
-                    serverSelectionTimeoutMS=20000,
-                    connectTimeoutMS=20000,
-                    socketTimeoutMS=60000,
+                    # Fail FAST, do not hang. These are reached only when the
+                    # connection is already broken, and every second spent
+                    # waiting is a second the whole API is frozen: pymongo is
+                    # synchronous, so a stalled call blocks FastAPI's event
+                    # loop and even the login page stops loading.
+                    #
+                    # Atlas drops idle SSL connections ("EOF occurred in
+                    # violation of protocol"); at 20s the app looked dead for
+                    # 20s each time. 5s is long enough for a real reconnect
+                    # on a slow link and short enough to stay usable.
+                    serverSelectionTimeoutMS=5000,
+                    connectTimeoutMS=5000,
+                    socketTimeoutMS=20000,
                     maxPoolSize=50,
                     minPoolSize=5,          # keep warm sockets ready
                     maxIdleTimeMS=300000,

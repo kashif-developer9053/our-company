@@ -376,7 +376,8 @@ async def harvest_leads_route(body: HarvestBody):
                     "status": {"$ne": "rejected"}}
         if body.city:
             nq["city"] = {"$regex": f"^{re.escape(body.city)}$", "$options": "i"}
-        already = get_db()["leads"].count_documents(nq)
+        already = await asyncio.to_thread(
+            get_db()["leads"].count_documents, nq)
         remaining = target - already
         if remaining <= 0:
             _set_status("idle")
@@ -397,17 +398,12 @@ async def harvest_leads_route(body: HarvestBody):
         # changes as soon as the web crawler turns up a published address.
         # Competitors and blocked entries stay excluded: those verdicts are
         # about what the business IS, so re-finding them only wastes rounds.
-        keep_out = {"competitor", "blocked", "junk"}
-        for d in get_db()["leads"].find(
-                {}, {"business_name": 1, "website": 1, "status": 1, "rejection_reason": 1}):
-            if d.get("status") == "rejected" and d.get("rejection_reason") not in keep_out:
-                continue
-            site = (d.get("website") or "").strip().lower()
-            if site:
-                host = site.split("//")[-1].split("/")[0]
-                exclude.add(host[4:] if host.startswith("www.") else host)
-            elif d.get("business_name"):
-                exclude.add(d["business_name"].strip().lower())
+        # Reading every lead is a SYNCHRONOUS round trip to Atlas, and pymongo
+        # blocks the event loop while it runs. Done inline here it froze the
+        # whole API the moment the CEO pressed "find leads" — the login page
+        # itself stopped loading, which is what "the backend stopped
+        # responding" actually was. Hand it to a worker thread instead.
+        exclude = await asyncio.to_thread(_existing_lead_keys)
 
     # A hunt can legitimately run up to an hour, but nginx closes an idle
     # proxied connection after 600s — which is exactly the 504 the CEO was
@@ -428,6 +424,35 @@ async def harvest_leads_route(body: HarvestBody):
                         f"This runs in the background and can take several minutes — "
                         f"progress appears below."),
             "already_held": already}
+
+
+
+def _existing_lead_keys() -> set[str]:
+    """Businesses we already hold, as website hosts or lowercase names.
+
+    Runs in a worker thread (see the caller): it is a full scan of the leads
+    collection over a remote connection, and pymongo is synchronous, so on the
+    event loop it stalls every other request including authentication.
+    """
+    keep_out = {"competitor", "blocked", "junk"}
+    keys: set[str] = set()
+    for d in get_db()["leads"].find(
+            {}, {"business_name": 1, "website": 1, "status": 1, "rejection_reason": 1}):
+        # Only block re-discovery of leads we actually still hold. Excluding
+        # rejected ones too meant 141 businesses could never be found again —
+        # including those rejected for "no contact", a verdict that changes as
+        # soon as the crawler turns up a published address. Competitors and
+        # blocked entries stay out: those verdicts are about what the business
+        # IS, so re-finding them only wastes rounds.
+        if d.get("status") == "rejected" and d.get("rejection_reason") not in keep_out:
+            continue
+        site = (d.get("website") or "").strip().lower()
+        if site:
+            host = site.split("//")[-1].split("/")[0]
+            keys.add(host[4:] if host.startswith("www.") else host)
+        elif d.get("business_name"):
+            keys.add(d["business_name"].strip().lower())
+    return keys
 
 
 async def _hunt_across_niches(body: "HarvestBody", target: int, where: str,
@@ -569,8 +594,12 @@ async def _run_hunt(run_id: str, body: "HarvestBody", target: int, already: int,
     for lead in leads:
         lead["status"] = "pending_approval"
         lead["batch_id"] = batch_id
-    stored = add_leads(leads, source="agent1_harvest",
-                       last_action=f"Harvested by Agent 1 ({what})")
+    # add_leads does a dedupe find_one plus an insert_one PER LEAD. For an
+    # 80-lead hunt that is 160 synchronous Atlas round trips, and on the event
+    # loop every one of them freezes the API. The hunt already runs in the
+    # background; this keeps its database work off the loop too.
+    stored = await asyncio.to_thread(
+        add_leads, leads, "agent1_harvest", f"Harvested by Agent 1 ({what})")
 
     notifications.notify(
         "approval",

@@ -47,6 +47,21 @@ def add_leads(rows: list[dict], source: str = "agent1", last_action: str = "Adde
                "purposes", "service_target",
                # approval-gate + contact provenance (batch_id is what the CEO approves against)
                "batch_id", "email_confidence", "email_source_url", "contact_verified", "has_working_website"}
+    # One dedupe query for the whole batch, not one per lead. A find_one plus
+    # an insert_one each meant 160 synchronous Atlas round trips for an 80-lead
+    # hunt — the single slowest thing the app did, and all of it blocking.
+    wanted = {(str(r.get("business_name", "")).strip(),
+               str(r.get("city", "")).strip()) for r in rows
+              if str(r.get("business_name", "")).strip()}
+    existing: set[tuple[str, str]] = set()
+    if wanted:
+        for d in col.find(
+                {"business_name": {"$in": sorted({n for n, _ in wanted})}},
+                {"business_name": 1, "city": 1}):
+            existing.add((str(d.get("business_name", "")).strip(),
+                          str(d.get("city", "")).strip()))
+
+    pending: list[dict] = []
     for row in rows:
         name = str(row.get("business_name", "")).strip()
         if not name:
@@ -58,10 +73,12 @@ def add_leads(rows: list[dict], source: str = "agent1", last_action: str = "Adde
             log.warning("Refused lead '%s' — no collection_reason", name)
             continue
         city = str(row.get("city", "")).strip()
-        # de-dupe: same business name in the same city already exists
-        if col.find_one({"business_name": name, "city": city}):
+        # de-dupe: same business name in the same city already exists, whether
+        # it was already stored or appears twice in this same batch.
+        if (name, city) in existing:
             skipped += 1
             continue
+        existing.add((name, city))
         clean = {k: row[k] for k in allowed if k in row and row[k] is not None}
         clean.setdefault("status", "new")
         lead = {
@@ -73,9 +90,11 @@ def add_leads(rows: list[dict], source: str = "agent1", last_action: str = "Adde
             "last_action_timestamp": _now(),
             "created_at": _now(),
         }
-        col.insert_one(dict(lead))
+        pending.append(dict(lead))
         added += 1
         ids.append(lead["id"])
+    if pending:
+        col.insert_many(pending, ordered=False)
     log.info("add_leads(%s): added=%d skipped=%d no_reason=%d", source, added, skipped, no_reason)
     return {"added": added, "skipped": skipped, "no_reason": no_reason, "ids": ids}
 

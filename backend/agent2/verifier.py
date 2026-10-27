@@ -112,14 +112,31 @@ def _email_for(lead: dict, domain: str) -> tuple[str, str]:
 
 
 def _is_duplicate(business_name: str, phone: str, domain: str) -> bool:
+    """Already in the CRM, by name+phone or by website domain.
+
+    This used to read EVERY non-rejected lead, in full, to compare domains —
+    once per lead being verified. At 1,400 leads that was 3.4 seconds a call
+    and over four minutes of frozen API for one hunt, because pymongo is
+    synchronous and blocks the event loop: the login page stopped loading
+    while a hunt ran.
+
+    The domain check is now a query the database can answer with an index,
+    matching the host as a substring of the stored URL rather than pulling
+    every document back to compare in Python.
+    """
     col = _leads()
-    if business_name and phone and col.find_one({"business_name": business_name, "phone": phone}):
+    if business_name and phone and col.find_one(
+            {"business_name": business_name, "phone": phone}, {"_id": 1}):
         return True
     if domain:
-        # Same website domain already present among non-rejected leads.
-        for existing in col.find({"status": {"$ne": "rejected"}}):
-            if _domain(existing.get("website", "")) == domain and domain:
-                return True
+        # Matches https://x.com, http://www.x.com/path and bare x.com alike,
+        # anchored on the domain so "notx.com" cannot match "x.com".
+        esc = re.escape(domain)
+        if col.find_one({"status": {"$ne": "rejected"},
+                         "website": {"$regex": rf"(^|//|\.)({esc})(/|$|\?)",
+                                     "$options": "i"}},
+                        {"_id": 1}):
+            return True
     return False
 
 
