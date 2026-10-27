@@ -171,7 +171,23 @@ export default function LeadHunter({ onDone }: { onDone?: () => void }) {
     (async () => {
       try {
         const a = await api.getActiveHunt();
-        if (!on || !a.ok || !a.running || !a.id) return;
+        if (!on) return;
+        if (!a.ok || !a.running || !a.id) {
+          // No run to rejoin. The status board can still say Agent 1 is
+          // working — it lives in the database while the run store lives in
+          // memory, so an API restart leaves the board stale. Say so plainly
+          // instead of showing a spinner that will never finish.
+          try {
+            const agents = await api.getAgents();
+            const a1 = agents.find((x) => x.id === "agent1");
+            if (on && a1?.status === "working") {
+              setErr("The status board still shows Agent 1 working, but no hunt "
+                     + "is running — the backend restarted mid-hunt. Any leads it "
+                     + "had already found are saved. Start a new hunt when ready.");
+            }
+          } catch { /* board unreachable — nothing useful to say */ }
+          return;
+        }
         setBusy(true);
         setRunId(a.id);
         if (a.niche) setLastNiche(a.niche);

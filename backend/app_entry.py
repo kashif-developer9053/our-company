@@ -178,6 +178,19 @@ async def _followup_loop():
 
 
 @asynccontextmanager
+def _clear_stale_agent_status() -> None:
+    """Reset agents left "working" by a process that is no longer running."""
+    try:
+        from shared.database import get_db
+        res = get_db()["agents"].update_many(
+            {"status": "working"}, {"$set": {"status": "idle", "task": ""}})
+        if res.modified_count:
+            log.info("Cleared stale 'working' status on %d agent(s)",
+                     res.modified_count)
+    except Exception as exc:  # noqa: BLE001 - never block startup over this
+        log.warning("Could not clear stale agent status: %s", exc)
+
+
 async def lifespan(app: FastAPI):
     import asyncio
     # Seed default agents + leads + agent instructions on startup (idempotent).
@@ -187,6 +200,12 @@ async def lifespan(app: FastAPI):
     # email_drafts had no indexes at all, so every mailbox open was a
     # full collection scan against an Atlas cluster ~240ms away.
     ensure_indexes()
+    # Agent status lives in the database, but the work it describes lives in
+    # memory. A restart — or a hunt killed mid-flight — therefore left
+    # "Working" on the board forever, with a stale progress line under it,
+    # while nothing was actually running. Clear it: on a fresh process no
+    # agent is working by definition.
+    _clear_stale_agent_status()
     task = asyncio.create_task(_reply_check_loop())
     health_task = asyncio.create_task(_health_check_loop())
     followup_task = asyncio.create_task(_followup_loop())
