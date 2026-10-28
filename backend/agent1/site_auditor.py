@@ -46,6 +46,14 @@ _QUALIFYING_CODES = {
     "http_error",          # visitors hit an error page
 }
 
+# Status codes that mean "the site is blocking our checker", not "the site is
+# broken". A browser loads these pages perfectly:
+#   401 login wall · 403 WAF/bot block · 429 rate limited · 999 LinkedIn
+# 403 and 429 alone accounted for 107 of the 140 leads flagged as having a
+# broken site. Cloudflare and similar sit in front of a large share of real
+# businesses, so this is the normal case, not an edge case.
+_BOT_BLOCK_CODES = {401, 403, 429, 999}
+
 # Deliberately NOT qualifying, though still recorded in the audit: slow pages,
 # missing contact forms, no HTTPS, an outdated CMS. Each is real work, but
 # none of them is why a business commissions a new website — a directory with
@@ -87,7 +95,20 @@ def _check_transport(url: str, response: httpx.Response | None, error: str) -> l
             "no_https", CRITICAL, "No HTTPS (insecure site)",
             f"Site served over {parsed.scheme.upper()} at {url}",
             "Browsers mark it 'Not secure' and Google demotes it — SSL setup + migration."))
-    if response.status_code >= 400:
+    if response.status_code in _BOT_BLOCK_CODES:
+        # The site is up and fine — it is refusing US. 403 and 429 are a WAF
+        # or rate limiter reacting to a scraper, 401 is a login wall, 999 is
+        # LinkedIn's bot block. Reporting these as "your site returns an
+        # error" told 107 businesses their working site was broken, which is
+        # both wrong and the fastest way to lose the reply. Recorded so the
+        # audit is honest about what happened, but never a reason to contact
+        # anyone and never a defect.
+        out.append(_finding(
+            "blocked_to_us", LOW, "Could not check the site automatically",
+            f"{url} responded {response.status_code} to our checker "
+            f"(bot protection or rate limiting) — the site itself looks fine",
+            "No pitch here: we could not see the site, so we know nothing about it."))
+    elif response.status_code >= 400:
         out.append(_finding(
             "http_error", CRITICAL, f"Site returns HTTP {response.status_code}",
             f"{url} responded {response.status_code}",
@@ -291,6 +312,22 @@ async def audit_site(website: str, client: httpx.AsyncClient | None = None) -> d
                     error = ""
                 except Exception as exc2:  # noqa: BLE001
                     error = f"{type(exc2).__name__}"
+        # A 429 is the server asking us to slow down, not a verdict on the
+        # site. Wait the interval it names (capped, so one slow host cannot
+        # stall the hunt) and ask once more before concluding anything.
+        if response is not None and response.status_code == 429:
+            delay = 2.0
+            try:
+                ra = response.headers.get("retry-after", "")
+                if ra.strip().isdigit():
+                    delay = min(float(ra.strip()), 10.0)
+            except Exception:  # noqa: BLE001
+                pass
+            await asyncio.sleep(delay)
+            try:
+                response = await client.get(url)
+            except Exception:  # noqa: BLE001 - keep the original response
+                pass
         elapsed_ms = int((time.perf_counter() - start) * 1000)
 
         findings += _check_transport(str(response.url) if response else url, response, error)
@@ -307,6 +344,11 @@ async def audit_site(website: str, client: httpx.AsyncClient | None = None) -> d
             result["ok"] = True
         elif error:
             result["ok"] = True  # the audit itself succeeded: the site is down
+        elif response is not None and response.status_code in _BOT_BLOCK_CODES:
+            # We reached the server and it turned us away. The audit ran
+            # fine; we simply learned nothing about the site.
+            result["ok"] = True
+            result["unknown"] = True
 
     except Exception as exc:  # noqa: BLE001
         log.error("Audit failed in isolation for %s: %s", website, exc)
@@ -344,6 +386,11 @@ def build_reason(audit: dict) -> str:
     if not findings:
         return ("Their website is already in good shape — no clear web/SEO problem to solve, "
                 "so this is a weak prospect for web services.")
+    if audit.get("unknown") or {f["code"] for f in findings} == {"blocked_to_us"}:
+        return ("Their website blocked our automated check (bot protection or "
+                "rate limiting), so we could not inspect it. The site itself "
+                "appears to be working — judge this lead on the business, not "
+                "on its website.")
     top = findings[:3]
     bits = "; ".join(f"{f['title']} ({f['evidence']})" for f in top)
     extra = len(findings) - len(top)
