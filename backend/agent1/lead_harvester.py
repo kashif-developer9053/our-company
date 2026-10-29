@@ -62,7 +62,9 @@ def _swept_niche(lead: dict, query: str = "") -> str:
 def _qualifies(service: str, lead: dict, sweep: bool) -> tuple[bool, str]:
     """Is this lead worth keeping, given what the hunt is looking for?"""
     if not sweep:
-        return service_qualifies(service, lead)
+        # Not a sweep means the CEO named the service. A website hunt must
+        # then return website leads only — see service_targets.qualifies.
+        return service_qualifies(service, lead, allow_other=False)
 
     # A niche hunt asks for one trade, so what comes back is roughly right.
     # A sweep asks a whole town and gets software houses, chain branches and
@@ -75,7 +77,8 @@ def _qualifies(service: str, lead: dict, sweep: bool) -> tuple[bool, str]:
         return False, why
     # An area sweep has no service to test against. The honest question is
     # whether the diagnosis found anything we could sell them — if it did not,
-    # there is no message to write and the lead is worthless.
+    # there is no message to write and the lead is worthless. A good website
+    # is explicitly not a rejection here, which is the point of a sweep.
     if diagnose_purposes(lead):
         return True, ""
     return False, "nothing we can honestly sell them"
@@ -700,11 +703,24 @@ async def harvest_leads(
         else:
             why = (f"I used all {rounds_run} search phrasings I have for this niche and only "
                    f"{len(pool)} distinct businesses exist in these results.")
+        # When a website hunt comes back thin because the businesses all have
+        # working sites, the useful thing to say is not "try a wider area" —
+        # it is that those businesses are still prospects, for something else.
+        # Searching the same niche again for website work will return the same
+        # nothing.
+        advice = "To get more, try a wider location or another niche."
+        if (not sweep and is_website_service(service)
+                and rejected["good_site"] > max(len(leads), 3)):
+            advice = (f"Most businesses here already have a working website, so there is "
+                      f"no website work to sell them. Those {rejected['good_site']} are "
+                      f"still real prospects for a booking, CRM or stock system — run "
+                      f"this niche again with that service selected, or use an area "
+                      f"sweep, which keeps a business whatever its website looks like.")
         message = (
             f"Found {len(leads)} of the {target} you asked for, in {niche} ({where}). {why} "
             f"Of the {len(pool)} businesses I examined, {rejected['no_contact']} had no verified "
             f"contact (guessed addresses don't count) and {rejected['good_site']} already have good "
-            f"websites, so they aren't prospects. To get more, try a wider location or another niche."
+            f"websites, so they aren't website prospects. {advice}"
         )
 
     return {

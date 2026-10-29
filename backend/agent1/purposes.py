@@ -111,21 +111,22 @@ _NICHE_SIGNALS: tuple[tuple[str, str], ...] = (
      r"learning cent\w*|driving school)\b", "lms"),
 )
 
-# Website faults that justify a website pitch. Cosmetic findings never do:
-# nobody commissions a new site because a meta tag is missing.
+# Website faults that justify a website pitch. This must stay in step with
+# the auditor's own `_QUALIFYING_CODES`: it is the SAME question, and when the
+# two disagree the lead carries a label its evidence contradicts.
 #
-# These are the auditor's CRITICAL codes — the ones a business owner can be
-# shown and will recognise as broken. The set used to hold only the three
-# "site does not load" codes, so a site that loaded but was unusable on a
-# phone, served no HTTPS, or took half a minute got no website pitch at all,
-# even when the auditor had already qualified it as needing a rebuild.
+# It was briefly widened to include no_https, not_mobile_friendly, very_slow,
+# no_title and no_contact_route. That is what produced a batch of wedding
+# photographers labelled "Website" whose own evidence block read "their site
+# is broadly fine... not worth outreach for web/SEO services". Those are real
+# work, but none of them is why a business commissions a new site, and
+# pitching a rebuild to an owner whose site works loses the call in one
+# sentence. A site that loads but is slow or insecure is an SEO/improvement
+# conversation, which is what the `seo` purpose is for.
 _WEBSITE_FAULTS = {
-    "no_website", "site_unreachable", "http_error",
-    "not_mobile_friendly",   # most traffic here is mobile
-    "no_https",              # browsers now show "Not secure"
-    "very_slow",             # visitors leave before it paints
-    "no_title",              # nothing usable for Google to show
-    "no_contact_route",      # a site nobody can enquire through
+    "no_website",          # nothing to find at all
+    "site_unreachable",    # the site does not open
+    "http_error",          # visitors hit an error page
 }
 
 # Enough of an online presence to imply enquiries are already arriving, which
@@ -217,9 +218,11 @@ def brief(purposes: list[str], lead: dict) -> str:
         evidence.append("no website at all")
     else:
         codes = {f.get("code") for f in (lead.get("site_audit") or {}).get("findings", [])}
-        # Say what is actually wrong. _WEBSITE_FAULTS now covers sites that
-        # load but are unusable, and telling an owner their working site
-        # "does not load" loses the call in one sentence.
+        # Say what is actually wrong, most serious first. A rebuild pitch
+        # only ever reaches the first branch; the rest serve an SEO or
+        # improvement pitch, where "slow" or "not secure" is a true and
+        # checkable fact. Telling an owner whose site works that it "does not
+        # load" loses the call in one sentence, so the order matters.
         if codes & {"site_unreachable", "http_error"}:
             evidence.append("their website does not load")
         elif "not_mobile_friendly" in codes:

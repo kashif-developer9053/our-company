@@ -124,25 +124,43 @@ def niches_for(service: str) -> list[str]:
     return list(get(service).get("niches") or [])
 
 
-def qualifies(service: str, lead: dict) -> tuple[bool, str]:
+def qualifies(service: str, lead: dict, allow_other: bool = False) -> tuple[bool, str]:
     """Is this lead worth collecting for the service being sold?
 
     For website work the site audit already decided, so this defers to it.
     For everything else the audit is the wrong test and size is the real one.
+
+    `allow_other` is for an AREA SWEEP only, where no service was chosen and
+    the honest question is "can we sell this business anything at all?". When
+    the CEO picked "website" explicitly, a business with a working website is
+    not a website lead, however much else we could sell them — see below.
     """
     if is_website_service(service):
         audit = lead.get("site_audit") or {}
         if audit.get("qualified"):
             return True, ""
-        # A sound website is not a reason to throw the business away. We sell
-        # six other things, and the businesses that invested in a good site
-        # are the ones that invest. Rejecting them here is why a hunt for
-        # "furniture makers in Murree" came back with almost nothing: every
-        # maker with a working site was discarded as "nothing to sell them",
-        # while needing exactly the stock system we build.
-        #
-        # So ask the real question — is there anything we can honestly sell
-        # them? — and keep the lead for THAT, stating the true reason.
+        if not allow_other:
+            # Asking for website work and getting back businesses whose sites
+            # are fine is the complaint this answers. A sweep may keep them
+            # for something else; a website hunt may not, because the CEO
+            # asked a specific question and deserves the real answer — even
+            # when the real answer is "this town's photographers all have
+            # working sites".
+            #
+            # A site we were blocked from checking is a THIRD case: we did not
+            # see it, so claiming it works is as wrong as claiming it is
+            # broken. It is still not a website lead — we have no fault to
+            # show the owner — but the reason must say what actually happened.
+            if audit.get("unknown"):
+                return False, ("their website blocked our check, so we have no "
+                               "website fault to show them")
+            return False, "their website works — not a website lead"
+        # On a sweep, a sound website is not a reason to throw the business
+        # away. We sell six other things, and the businesses that invested in
+        # a good site are the ones that invest. Rejecting them here is why a
+        # sweep of Murree came back with almost nothing: every business with a
+        # working site was discarded as "nothing to sell them", while needing
+        # exactly the stock system we build.
         from .purposes import PURPOSES, diagnose
         other = [p for p in diagnose(lead) if p != "website"]
         if other:
