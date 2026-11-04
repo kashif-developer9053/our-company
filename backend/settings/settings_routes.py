@@ -35,7 +35,7 @@ def _now() -> str:
 
 @router.get("")
 @safe_endpoint("settings")
-async def get_settings():
+def get_settings():
     """Which keys are set + a preview. Secret keys are masked; non-secret keys
     (emails) return their full value. NEVER returns a secret's real value."""
     stored = {d["key_name"]: d for d in _col().find({})}
@@ -70,7 +70,7 @@ async def get_settings():
 
 @router.post("")
 @safe_endpoint("settings")
-async def save_setting(body: SettingWrite):
+def save_setting(body: SettingWrite):
     if body.key_name not in SUPPORTED_KEY_NAMES:
         raise HTTPException(status_code=400, detail=f"Unsupported key: {body.key_name}")
     raw = body.value.strip()
@@ -90,7 +90,7 @@ async def save_setting(body: SettingWrite):
 
 @router.delete("/{key_name}")
 @safe_endpoint("settings")
-async def delete_setting(key_name: str):
+def delete_setting(key_name: str):
     _col().delete_one({"key_name": key_name})
     log.info("Removed key '%s'", key_name)
     return {"ok": True, "deleted": key_name}
@@ -98,7 +98,7 @@ async def delete_setting(key_name: str):
 
 @router.post("/imap-same-as-smtp")
 @safe_endpoint("settings")
-async def imap_same_as_smtp():
+def imap_same_as_smtp():
     """Copy the stored SMTP email + app password into the IMAP slots (server-side,
     so the secret password never needs to travel to the browser)."""
     from shared.settings_store import get_setting_value
@@ -115,13 +115,13 @@ async def imap_same_as_smtp():
 
 @router.get("/config")
 @safe_endpoint("settings")
-async def read_config():
+def read_config():
     return {"ok": True, "config": get_config()}
 
 
 @router.post("/config")
 @safe_endpoint("settings")
-async def write_config(body: ConfigWrite):
+def write_config(body: ConfigWrite):
     return {"ok": True, "config": set_config(body.daily_send_cap)}
 
 
@@ -163,13 +163,13 @@ class ProviderWrite(BaseModel):
 
 @router.get("/providers")
 @safe_endpoint("settings")
-async def list_providers():
+def list_providers():
     return {"ok": True, "providers": ai_client.list_providers_public()}
 
 
 @router.post("/providers")
 @safe_endpoint("settings")
-async def save_provider_route(body: ProviderWrite):
+def save_provider_route(body: ProviderWrite):
     from shared.providers import PROVIDERS
     if body.provider_id not in PROVIDERS:
         raise HTTPException(status_code=400, detail="Unknown provider")
@@ -179,7 +179,7 @@ async def save_provider_route(body: ProviderWrite):
 
 @router.delete("/providers/{provider_id}")
 @safe_endpoint("settings")
-async def delete_provider_route(provider_id: str):
+def delete_provider_route(provider_id: str):
     ai_client.delete_provider(provider_id)
     return {"ok": True, "deleted": provider_id}
 
@@ -216,19 +216,19 @@ class CompanyProfileBody(BaseModel):
 
 @router.get("/company")
 @safe_endpoint("settings")
-async def get_company():
+def get_company():
     return {"ok": True, "profile": company_profile.get_profile()}
 
 
 @router.post("/company")
 @safe_endpoint("settings")
-async def set_company(body: CompanyProfileBody):
+def set_company(body: CompanyProfileBody):
     return {"ok": True, "profile": company_profile.set_profile(body.model_dump())}
 
 
 @router.get("/usage")
 @safe_endpoint("settings")
-async def usage_summary(range: str = "week"):
+def usage_summary(range: str = "week"):
     from datetime import datetime, timedelta, timezone
     days = {"day": 1, "week": 7, "month": 30}.get(range, 7)
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()

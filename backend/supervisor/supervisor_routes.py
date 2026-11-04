@@ -135,7 +135,7 @@ def _today() -> str:
 
 @router.get("/standup")
 @safe_endpoint("supervisor")
-async def get_standup():
+def get_standup():
     db = get_db()
     docs = list(db["standups"].find({}))
     docs.sort(key=lambda d: d.get("date", ""), reverse=True)
@@ -275,7 +275,7 @@ async def strategic_review_now():
 
 @router.get("/strategic-review")
 @safe_endpoint("supervisor")
-async def latest_strategic_review():
+def latest_strategic_review():
     docs = list(get_db()["strategic_reviews"].find({}))
     docs.sort(key=lambda d: d.get("created_at", ""), reverse=True)
     if not docs:
@@ -286,7 +286,7 @@ async def latest_strategic_review():
 
 @router.get("/proposals")
 @safe_endpoint("supervisor")
-async def list_proposals():
+def list_proposals():
     docs = list(get_db()["coaching_proposals"].find({"status": "pending"}))
     for d in docs:
         d.pop("_id", None)
@@ -295,7 +295,7 @@ async def list_proposals():
 
 @router.post("/proposals/{proposal_id}/approve")
 @safe_endpoint("supervisor")
-async def approve_proposal(proposal_id: str):
+def approve_proposal(proposal_id: str):
     db = get_db()
     p = db["coaching_proposals"].find_one({"id": proposal_id})
     if p is None:
@@ -308,7 +308,7 @@ async def approve_proposal(proposal_id: str):
 
 @router.post("/proposals/{proposal_id}/reject")
 @safe_endpoint("supervisor")
-async def reject_proposal(proposal_id: str):
+def reject_proposal(proposal_id: str):
     get_db()["coaching_proposals"].update_one({"id": proposal_id}, {"$set": {"status": "rejected"}})
     return {"ok": True}
 

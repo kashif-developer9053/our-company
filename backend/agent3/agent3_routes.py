@@ -615,7 +615,7 @@ class DraftBatchBody(BaseModel):
 
 @router.get("/draft-targets")
 @safe_endpoint("agent3")
-async def draft_targets():
+def draft_targets():
     """Cities and niches that still have un-emailed leads, with counts.
 
     Feeds the Outreach filter dropdowns so the CEO can see at a glance where
@@ -851,7 +851,7 @@ async def brevo_webhook(secret: str, payload: dict):
 
 @router.get("/webhook-url")
 @safe_endpoint("agent3")
-async def webhook_url():
+def webhook_url():
     """The URL to paste into Brevo. Shown once in Settings; treat it as a secret."""
     return {"ok": True, "path": f"/api/agent3/hooks/brevo/{_webhook_secret()}"}
 
@@ -873,7 +873,7 @@ async def engagement_summary(days: int = 30):
 
 @router.get("/deliverability")
 @safe_endpoint("agent3")
-async def deliverability(days: int = 30):
+def deliverability(days: int = 30):
     """Bounce rate and suppression totals — the numbers that say whether it
     is safe to increase sending volume."""
     return {"ok": True, **suppression_stats(days)}
@@ -930,7 +930,7 @@ class FollowupBody(BaseModel):
 
 @router.get("/followups/due")
 @safe_endpoint("agent3")
-async def followups_due(limit: int = 100):
+def followups_due(limit: int = 100):
     """Who is waiting on a follow-up, and which step they are on.
 
     Read-only: this is the screen that tells the CEO how much is sitting idle.
@@ -1036,7 +1036,7 @@ def _ser_draft(d: dict) -> dict:
 
 @router.get("/drafts")
 @safe_endpoint("agent3")
-async def list_drafts(status: str = "pending"):
+def list_drafts(status: str = "pending"):
     q = {} if status == "all" else {"status": status}
     docs = list(_drafts().find(q).sort("created_at", -1).limit(200))
     return {"ok": True, "drafts": [_ser_draft(d) for d in docs], "total": len(docs)}
@@ -1050,7 +1050,7 @@ class EditDraftBody(BaseModel):
 
 @router.put("/drafts/{draft_id}")
 @safe_endpoint("agent3")
-async def edit_draft(draft_id: str, body: EditDraftBody):
+def edit_draft(draft_id: str, body: EditDraftBody):
     """CEO edits a draft; the designed HTML is re-rendered from the new copy."""
     d = _drafts().find_one({"id": draft_id})
     if not d:
@@ -1133,7 +1133,7 @@ WA_SYSTEM = (
 
 @router.get("/whatsapp/leads")
 @safe_endpoint("agent3")
-async def whatsapp_leads(status: str = "all", only_usable: bool = True, limit: int = 300,
+def whatsapp_leads(status: str = "all", only_usable: bool = True, limit: int = 300,
                          city: str = "", issue: str = "", sort: str = "newest"):
     """Leads reachable on WhatsApp — those with a usable mobile number."""
     from .whatsapp import serialize as wa_ser
@@ -1335,7 +1335,7 @@ class WaUpdateBody(BaseModel):
 
 @router.put("/whatsapp/leads/{lead_id}")
 @safe_endpoint("agent3")
-async def whatsapp_update(lead_id: str, body: WaUpdateBody):
+def whatsapp_update(lead_id: str, body: WaUpdateBody):
     """Record what happened: message sent, they replied, interested, etc."""
     from .whatsapp import WA_STATUSES, wa_state
 
@@ -1383,7 +1383,7 @@ def _update_reply(lead_id: str, received_at: str, changes: dict) -> bool:
 
 @router.post("/inbox/read")
 @safe_endpoint("agent3")
-async def mark_reply_read(body: ReplyActionBody):
+def mark_reply_read(body: ReplyActionBody):
     ok = _update_reply(body.lead_id, body.received_at, {"read": True})
     if not ok:
         raise HTTPException(status_code=404, detail="Reply not found")
@@ -1392,7 +1392,7 @@ async def mark_reply_read(body: ReplyActionBody):
 
 @router.post("/inbox/archive")
 @safe_endpoint("agent3")
-async def archive_reply(body: ReplyActionBody):
+def archive_reply(body: ReplyActionBody):
     ok = _update_reply(body.lead_id, body.received_at, {"archived": True, "read": True})
     if not ok:
         raise HTTPException(status_code=404, detail="Reply not found")
@@ -1401,7 +1401,7 @@ async def archive_reply(body: ReplyActionBody):
 
 @router.post("/inbox/unarchive")
 @safe_endpoint("agent3")
-async def unarchive_reply(body: ReplyActionBody):
+def unarchive_reply(body: ReplyActionBody):
     ok = _update_reply(body.lead_id, body.received_at, {"archived": False})
     if not ok:
         raise HTTPException(status_code=404, detail="Reply not found")
@@ -1410,7 +1410,7 @@ async def unarchive_reply(body: ReplyActionBody):
 
 @router.post("/inbox/delete")
 @safe_endpoint("agent3")
-async def delete_reply(body: ReplyActionBody):
+def delete_reply(body: ReplyActionBody):
     """Soft delete — the message stays in the lead's history for the record,
     it just stops appearing in the mailbox."""
     ok = _update_reply(body.lead_id, body.received_at, {"deleted": True})
@@ -1485,7 +1485,7 @@ async def send_inbox_reply(body: InboxReplyBody):
 
 @router.get("/mailbox")
 @safe_endpoint("agent3")
-async def mailbox(folder: str = "drafts", limit: int = 100):
+def mailbox(folder: str = "drafts", limit: int = 100):
     """Mail-client view of outreach: drafts / sent / replies / failed / rejected.
 
     Folders are derived from data we already hold — drafts from `email_drafts`,
@@ -1592,7 +1592,7 @@ class DraftDecision(BaseModel):
 
 @router.post("/drafts/reject")
 @safe_endpoint("agent3")
-async def reject_drafts(body: DraftDecision):
+def reject_drafts(body: DraftDecision):
     """Discard drafts AND stop writing to those leads again.
 
     Rejecting used to mark only the draft, leaving the lead `verified` and
@@ -1644,7 +1644,7 @@ class UndoExcludeBody(BaseModel):
 
 @router.post("/leads/allow-email")
 @safe_endpoint("agent3")
-async def allow_email_again(body: UndoExcludeBody):
+def allow_email_again(body: UndoExcludeBody):
     """Undo a discard: let these leads be written to again.
 
     Discarding is easy to do by accident on a batch, and without this the only
@@ -1764,7 +1764,7 @@ async def _send_approved(draft_ids: list[str]) -> None:
 
 @router.post("/drafts/retry")
 @safe_endpoint("agent3")
-async def retry_failed(body: DraftDecision):
+def retry_failed(body: DraftDecision):
     """Put failed sends back in the queue and try again.
 
     A failure is usually transient (blocked port, timeout, provider hiccup), so
@@ -1935,7 +1935,7 @@ async def check_replies():
 
 @router.get("/replies/pending")
 @safe_endpoint("agent3")
-async def pending_replies():
+def pending_replies():
     out = []
     for lead in _leads().find({"status": "interested_awaiting_review"}):
         hist = lead.get("outreach_history", [])
@@ -2096,7 +2096,7 @@ class ScheduleCall(BaseModel):
 
 @router.post("/leads/{lead_id}/schedule-call")
 @safe_endpoint("agent3")
-async def schedule_call(lead_id: str, body: ScheduleCall):
+def schedule_call(lead_id: str, body: ScheduleCall):
     if _leads().find_one({"id": lead_id}) is None:
         raise HTTPException(status_code=404, detail="Lead not found")
     # STUB ONLY: records a date. No dialing integration is built in this phase.

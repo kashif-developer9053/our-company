@@ -188,7 +188,7 @@ def _serialize_req(d: dict) -> dict:
 
 @router.post("/request-new-agent")
 @safe_endpoint("it_monitor")
-async def request_new_agent(body: NewAgentRequest, _: dict = Depends(require_admin)):
+def request_new_agent(body: NewAgentRequest, _: dict = Depends(require_admin)):
     request_id = f"req_{_uuid.uuid4().hex[:8]}"
     get_db()["agent_build_requests"].insert_one({
         "request_id": request_id, "agent_name": body.agent_name.strip(),
@@ -202,7 +202,7 @@ async def request_new_agent(body: NewAgentRequest, _: dict = Depends(require_adm
 
 @router.get("/agent-requests")
 @safe_endpoint("it_monitor")
-async def list_agent_requests(_: dict = Depends(require_admin)):
+def list_agent_requests(_: dict = Depends(require_admin)):
     docs = list(get_db()["agent_build_requests"].find({}))
     docs.sort(key=lambda d: d.get("generated_at", ""), reverse=True)
     return {"ok": True, "requests": [_serialize_req(d) for d in docs]}
@@ -210,7 +210,7 @@ async def list_agent_requests(_: dict = Depends(require_admin)):
 
 @router.post("/agent-requests/{request_id}/approve")
 @safe_endpoint("it_monitor")
-async def approve_request(request_id: str, _: dict = Depends(require_admin)):
+def approve_request(request_id: str, _: dict = Depends(require_admin)):
     doc = get_db()["agent_build_requests"].find_one({"request_id": request_id})
     if doc is None:
         raise HTTPException(status_code=404, detail="Request not found")
@@ -222,7 +222,7 @@ async def approve_request(request_id: str, _: dict = Depends(require_admin)):
 
 @router.post("/agent-requests/{request_id}/reject")
 @safe_endpoint("it_monitor")
-async def reject_agent_request(request_id: str, body: RejectBody, _: dict = Depends(require_admin)):
+def reject_agent_request(request_id: str, body: RejectBody, _: dict = Depends(require_admin)):
     doc = get_db()["agent_build_requests"].find_one({"request_id": request_id})
     if doc is None:
         raise HTTPException(status_code=404, detail="Request not found")

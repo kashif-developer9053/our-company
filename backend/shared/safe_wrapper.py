@@ -10,6 +10,7 @@ logged per-module, and turned into a clean error result instead of a crash.
 from __future__ import annotations
 
 import functools
+import inspect
 import traceback
 from typing import Any, Callable
 
@@ -48,35 +49,62 @@ def safe_endpoint(module: str) -> Callable:
     """Decorator for FastAPI route handlers. Lets intentional HTTPExceptions
     (404/400/etc.) pass through, but catches any unexpected error, logs it under
     the module, and returns a clean 500 JSON response so the server process and
-    all other routers keep running."""
+    all other routers keep running.
+
+    The wrapper MUST keep a sync handler sync. FastAPI decides where to run a
+    handler by inspecting it: a coroutine function runs on the event loop, a
+    plain function runs in a threadpool. This decorator used to return an async
+    wrapper around everything, so a handler written as `def` — with the
+    synchronous pymongo calls that every route here makes — still ran on the
+    loop and blocked the whole process while Mongo answered. One slow Atlas
+    query then stalled every other request, which is why logging in returned a
+    504 while a lead hunt was running: nothing was broken, the loop was simply
+    not free to accept the login.
+    """
 
     def decorator(handler: Callable) -> Callable:
         log = get_logger(module)
 
-        @functools.wraps(handler)
-        async def wrapper(*args, **kwargs):
-            try:
-                return await handler(*args, **kwargs)
-            except HTTPException:
-                raise  # deliberate client errors — let FastAPI handle them
-            except Exception as exc:  # noqa: BLE001
-                log.error(
-                    "Unhandled error in %s.%s: %s\n%s",
-                    module,
-                    handler.__name__,
-                    exc,
-                    traceback.format_exc(),
-                )
-                _record_error(module)
-                return JSONResponse(
-                    status_code=500,
-                    content={
-                        "ok": False,
-                        "module": module,
-                        "error": f"{module} module error (isolated, app still running): {exc}",
-                    },
-                )
+        def _fail(exc: Exception) -> JSONResponse:
+            log.error(
+                "Unhandled error in %s.%s: %s\n%s",
+                module,
+                handler.__name__,
+                exc,
+                traceback.format_exc(),
+            )
+            _record_error(module)
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "ok": False,
+                    "module": module,
+                    "error": f"{module} module error (isolated, app still running): {exc}",
+                },
+            )
 
-        return wrapper
+        if inspect.iscoroutinefunction(handler):
+
+            @functools.wraps(handler)
+            async def async_wrapper(*args, **kwargs):
+                try:
+                    return await handler(*args, **kwargs)
+                except HTTPException:
+                    raise  # deliberate client errors — let FastAPI handle them
+                except Exception as exc:  # noqa: BLE001
+                    return _fail(exc)
+
+            return async_wrapper
+
+        @functools.wraps(handler)
+        def sync_wrapper(*args, **kwargs):
+            try:
+                return handler(*args, **kwargs)
+            except HTTPException:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                return _fail(exc)
+
+        return sync_wrapper
 
     return decorator

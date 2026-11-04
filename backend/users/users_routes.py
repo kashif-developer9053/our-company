@@ -39,7 +39,7 @@ def _active_admin_count() -> int:
 # ---- self-service (any logged-in user) — defined BEFORE /{id} routes -------
 @router.put("/me/password")
 @safe_endpoint("users")
-async def change_my_password(body: SelfPasswordChange, user: dict = Depends(get_current_user)):
+def change_my_password(body: SelfPasswordChange, user: dict = Depends(get_current_user)):
     # Current password required even for admins (safety check).
     if not verify_password(body.current_password, user.get("password_hash", "")):
         raise HTTPException(status_code=400, detail="Current password is incorrect")
@@ -50,7 +50,7 @@ async def change_my_password(body: SelfPasswordChange, user: dict = Depends(get_
 
 @router.put("/me")
 @safe_endpoint("users")
-async def update_my_profile(body: UserUpdate, user: dict = Depends(get_current_user)):
+def update_my_profile(body: UserUpdate, user: dict = Depends(get_current_user)):
     updates = {}
     if body.name is not None:
         updates["name"] = body.name.strip()
@@ -66,13 +66,13 @@ async def update_my_profile(body: UserUpdate, user: dict = Depends(get_current_u
 # ---- admin-only ------------------------------------------------------------
 @router.get("")
 @safe_endpoint("users")
-async def list_users(_: dict = Depends(require_admin)):
+def list_users(_: dict = Depends(require_admin)):
     return {"ok": True, "users": [serialize(d) for d in _col().find({})]}
 
 
 @router.post("")
 @safe_endpoint("users")
-async def create_user(body: UserCreate, _: dict = Depends(require_admin)):
+def create_user(body: UserCreate, _: dict = Depends(require_admin)):
     if not valid_email(body.email):
         raise HTTPException(status_code=400, detail="Invalid email")
     email = body.email.strip().lower()
@@ -102,7 +102,7 @@ async def create_user(body: UserCreate, _: dict = Depends(require_admin)):
 
 @router.put("/{user_id}")
 @safe_endpoint("users")
-async def update_user(user_id: str, body: UserUpdate, admin: dict = Depends(require_admin)):
+def update_user(user_id: str, body: UserUpdate, admin: dict = Depends(require_admin)):
     doc = _col().find_one({"id": user_id})
     if doc is None:
         raise HTTPException(status_code=404, detail="User not found")
@@ -128,7 +128,7 @@ async def update_user(user_id: str, body: UserUpdate, admin: dict = Depends(requ
 
 @router.put("/{user_id}/password")
 @safe_endpoint("users")
-async def reset_user_password(user_id: str, body: PasswordReset, _: dict = Depends(require_admin)):
+def reset_user_password(user_id: str, body: PasswordReset, _: dict = Depends(require_admin)):
     if _col().find_one({"id": user_id}) is None:
         raise HTTPException(status_code=404, detail="User not found")
     _col().update_one({"id": user_id}, {"$set": {"password_hash": hash_password(body.new_password)}})
@@ -138,7 +138,7 @@ async def reset_user_password(user_id: str, body: PasswordReset, _: dict = Depen
 
 @router.delete("/{user_id}")
 @safe_endpoint("users")
-async def delete_user(user_id: str, admin: dict = Depends(require_admin)):
+def delete_user(user_id: str, admin: dict = Depends(require_admin)):
     doc = _col().find_one({"id": user_id})
     if doc is None:
         raise HTTPException(status_code=404, detail="User not found")

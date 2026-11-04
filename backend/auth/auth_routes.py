@@ -1,4 +1,14 @@
-"""Authentication: first-run admin setup, login, logout, and 'me'."""
+"""Authentication: first-run admin setup, login, logout, and 'me'.
+
+These handlers are deliberately plain `def`, not `async def`. Every one of them
+makes synchronous pymongo calls, and login additionally runs bcrypt, which is
+slow by design. An `async def` handler runs ON the event loop, so that work
+blocked every other request in the process — logging in returned a 504 whenever
+something else (a lead hunt, a slow Atlas query) was already holding the loop.
+FastAPI runs a plain `def` handler in a threadpool instead, which is where
+blocking I/O belongs. See shared/safe_wrapper.safe_endpoint, which preserves
+whichever form the handler is written in.
+"""
 
 from __future__ import annotations
 
@@ -41,14 +51,14 @@ class LoginBody(BaseModel):
 
 @router.get("/needs-setup")
 @safe_endpoint("auth")
-async def needs_setup():
+def needs_setup():
     """True when no users exist yet (first-run). Open endpoint."""
     return {"ok": True, "needs_setup": _users().count_documents({}) == 0}
 
 
 @router.post("/setup")
 @safe_endpoint("auth")
-async def setup(body: SetupBody):
+def setup(body: SetupBody):
     # Only allowed to create the FIRST admin, and never again once users exist.
     if _users().count_documents({}) > 0:
         raise HTTPException(status_code=403, detail="Setup already completed")
@@ -72,7 +82,7 @@ async def setup(body: SetupBody):
 
 @router.post("/login")
 @safe_endpoint("auth")
-async def login(body: LoginBody):
+def login(body: LoginBody):
     email = body.email.strip().lower()
     user = _users().find_one({"email": email})
     if user is None or not verify_password(body.password, user.get("password_hash", "")):
@@ -94,12 +104,12 @@ async def login(body: LoginBody):
 
 @router.post("/logout")
 @safe_endpoint("auth")
-async def logout(user: dict = Depends(get_current_user)):
+def logout(user: dict = Depends(get_current_user)):
     revoke_token(user["_token_payload"])  # server-side invalidation
     return {"ok": True}
 
 
 @router.get("/me")
 @safe_endpoint("auth")
-async def me(user: dict = Depends(get_current_user)):
+def me(user: dict = Depends(get_current_user)):
     return {"ok": True, "user": serialize(user)}

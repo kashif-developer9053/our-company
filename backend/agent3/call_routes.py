@@ -91,7 +91,7 @@ def _card(lead: dict, caller_name: str = "") -> dict:
 
 @router.post("/queue")
 @safe_endpoint("agent3")
-async def queue_lead(body: QueueBody, user: dict = Depends(get_current_user)):
+def queue_lead(body: QueueBody, user: dict = Depends(get_current_user)):
     """Send a lead to the call list. CEO only."""
     if not _can_queue(user):
         raise HTTPException(status_code=403,
@@ -102,7 +102,7 @@ async def queue_lead(body: QueueBody, user: dict = Depends(get_current_user)):
 
 @router.post("/unqueue")
 @safe_endpoint("agent3")
-async def unqueue_lead(body: QueueBody, user: dict = Depends(get_current_user)):
+def unqueue_lead(body: QueueBody, user: dict = Depends(get_current_user)):
     if not _can_queue(user):
         raise HTTPException(status_code=403,
                             detail="Only the CEO can change the call list")
@@ -112,7 +112,7 @@ async def unqueue_lead(body: QueueBody, user: dict = Depends(get_current_user)):
 
 @router.get("/queue")
 @safe_endpoint("agent3")
-async def list_queue(status: str = "open", limit: int = 200,
+def list_queue(status: str = "open", limit: int = 200,
                      user: dict = Depends(get_current_user)):
     """The call list. `status` is a status key, "open", or "all".
 
@@ -143,7 +143,7 @@ async def list_queue(status: str = "open", limit: int = 200,
 
 @router.get("/lead/{lead_id}")
 @safe_endpoint("agent3")
-async def one_lead(lead_id: str, user: dict = Depends(get_current_user)):
+def one_lead(lead_id: str, user: dict = Depends(get_current_user)):
     lead = _leads().find_one({"id": lead_id})
     if not lead or not co.is_queued(lead):
         raise HTTPException(status_code=404, detail="That lead is not on the call list")
@@ -152,7 +152,7 @@ async def one_lead(lead_id: str, user: dict = Depends(get_current_user)):
 
 @router.post("/update")
 @safe_endpoint("agent3")
-async def update_lead(body: UpdateBody, user: dict = Depends(get_current_user)):
+def update_lead(body: UpdateBody, user: dict = Depends(get_current_user)):
     """Record a call outcome. The caller's main action."""
     ok, msg = co.update(body.lead_id, status=body.status, remarks=body.remarks,
                         logged_call=body.logged_call,
@@ -162,5 +162,5 @@ async def update_lead(body: UpdateBody, user: dict = Depends(get_current_user)):
 
 @router.get("/stats")
 @safe_endpoint("agent3")
-async def call_stats(day: str = "", user: dict = Depends(get_current_user)):
+def call_stats(day: str = "", user: dict = Depends(get_current_user)):
     return {"ok": True, **co.stats(day)}

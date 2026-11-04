@@ -14,7 +14,7 @@ router = APIRouter(prefix="/knowledge", tags=["knowledge"])
 
 @router.get("")
 @safe_endpoint("knowledge")
-async def list_kb():
+def list_kb():
     return {"ok": True, "entries": kb.list_entries()}
 
 
@@ -27,7 +27,7 @@ class TextEntry(BaseModel):
 
 @router.post("/text")
 @safe_endpoint("knowledge")
-async def add_text(body: TextEntry):
+def add_text(body: TextEntry):
     if not body.content.strip():
         raise HTTPException(status_code=400, detail="Empty content")
     entry = kb.add_entry(body.title.strip() or "Untitled", body.content.strip(), "text", body.scope, body.agent_id, None)
@@ -47,6 +47,6 @@ async def upload(file: UploadFile = File(...), scope: str = Form("global"), agen
 
 @router.delete("/{entry_id}")
 @safe_endpoint("knowledge")
-async def delete_kb(entry_id: str):
+def delete_kb(entry_id: str):
     kb.delete_entry(entry_id)
     return {"ok": True, "deleted": entry_id}

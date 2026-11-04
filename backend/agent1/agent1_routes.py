@@ -215,7 +215,7 @@ async def find_niches(body: NicheRequest):
 
 @router.get("/niches/pending")
 @safe_endpoint("agent1")
-async def pending_niches():
+def pending_niches():
     docs = list(_col().find({"status": "awaiting_ceo_approval"}))
     docs.sort(key=lambda d: d.get("created_at", ""), reverse=True)
     return {"ok": True, "pending": [serialize(d) for d in docs]}
@@ -223,7 +223,7 @@ async def pending_niches():
 
 @router.post("/niches/{niche_id}/approve")
 @safe_endpoint("agent1")
-async def approve_niche(niche_id: str, body: dict):
+def approve_niche(niche_id: str, body: dict):
     doc = _col().find_one({"id": niche_id})
     if doc is None:
         raise HTTPException(status_code=404, detail="Niche set not found")
@@ -244,7 +244,7 @@ async def approve_niche(niche_id: str, body: dict):
 
 @router.post("/niches/{niche_id}/reject-all")
 @safe_endpoint("agent1")
-async def reject_all(niche_id: str):
+def reject_all(niche_id: str):
     doc = _col().find_one({"id": niche_id})
     if doc is None:
         raise HTTPException(status_code=404, detail="Niche set not found")
@@ -304,7 +304,7 @@ class HarvestBody(BaseModel):
 
 @router.post("/stop-hunt/{run_id}")
 @safe_endpoint("agent1")
-async def stop_hunt(run_id: str):
+def stop_hunt(run_id: str):
     """Call off a running hunt.
 
     Leads already found are NOT lost: whatever the hunt had qualified before
@@ -335,7 +335,7 @@ async def stop_hunt(run_id: str):
 
 @router.post("/stop-all-hunts")
 @safe_endpoint("agent1")
-async def stop_all_hunts():
+def stop_all_hunts():
     """Call off every running hunt. The panic button."""
     stopped = []
     for rid, run in list(_hunt_runs().items()):
@@ -353,7 +353,7 @@ async def stop_all_hunts():
 
 @router.get("/active-hunt")
 @safe_endpoint("agent1")
-async def active_hunt():
+def active_hunt():
     """The hunt currently running, if any.
 
     A reload loses the run id, which lived only in the page's state — so the
@@ -373,7 +373,7 @@ async def active_hunt():
 
 @router.get("/hunt-status/{run_id}")
 @safe_endpoint("agent1")
-async def hunt_status(run_id: str):
+def hunt_status(run_id: str):
     """Progress of a background lead hunt.
 
     The hunt no longer blocks the request, so this is how the UI follows it.
@@ -387,7 +387,7 @@ async def hunt_status(run_id: str):
 
 @router.get("/services")
 @safe_endpoint("agent1")
-async def services():
+def services():
     """What we can sell, and which niches buy each one.
 
     Website work is found by auditing a site. Everything else has to be
@@ -404,7 +404,7 @@ async def services():
 
 @router.get("/niche-performance")
 @safe_endpoint("agent1")
-async def niche_performance():
+def niche_performance():
     """What our own outreach proved about each niche we have worked.
 
     Exposed so the verdicts are inspectable rather than just silently shaping
@@ -651,10 +651,28 @@ async def _run_hunt(run_id: str, body: "HarvestBody", target: int, already: int,
 
     runs = _hunt_runs()
 
+    loop = asyncio.get_running_loop()
+
     def progress(msg: str) -> None:
-        _set_status("working", msg[:120])
+        """Report live hunt progress without stalling the whole server.
+
+        This is called from inside the harvester on every round and every
+        narration line, and the harvester is awaited — so anything slow here
+        runs ON the event loop and blocks every other request in the process.
+        A synchronous Atlas write per progress line is what made logging in
+        time out with a 504 while a hunt was running.
+
+        The in-memory run state is what the leads page polls, so it is updated
+        inline (a dict write, instant). The status-board write to Mongo is for
+        the office UI and is allowed to lag, so it is handed to a thread and
+        not waited on.
+        """
         if run_id in runs:
             runs[run_id]["message"] = msg[:200]
+        try:
+            loop.run_in_executor(None, _set_status, "working", msg[:120])
+        except RuntimeError:
+            pass  # loop closing — progress narration is not worth an error
 
     what = describe_mode(body.mode, body.niche, body.service, where)
     _set_status("working", f"Hunting {target} qualified leads: {what}")
@@ -729,7 +747,7 @@ async def _run_hunt(run_id: str, body: "HarvestBody", target: int, already: int,
 
 @router.get("/niche-progress")
 @safe_endpoint("agent1")
-async def niche_progress(niche: str, city: str = "", country: str = ""):
+def niche_progress(niche: str, city: str = "", country: str = ""):
     """How many leads we already hold for a niche, and what has been tried.
 
     This is what makes "find more in this niche" meaningful: the target is a

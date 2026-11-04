@@ -140,7 +140,7 @@ def _compute_stats(leads: list[dict]) -> dict:
 # ---- report stats (used by the Reports dashboard) --------------------------
 @router.get("/stats")
 @safe_endpoint("crm")
-async def lead_stats():
+def lead_stats():
     # Counting via aggregation instead of pulling every document: this used to
     # transfer the whole collection (~40s) just to tally statuses.
     # Rejected leads are excluded from headline stats (not real pipeline output).
@@ -168,7 +168,7 @@ async def lead_stats():
 # ---- CRUD ------------------------------------------------------------------
 @router.get("")
 @safe_endpoint("crm")
-async def list_leads(
+def list_leads(
     status: Optional[str] = Query(default=None),
     niche: Optional[str] = Query(default=None),
     q: Optional[str] = Query(default=None),
@@ -198,7 +198,7 @@ async def list_leads(
 
 @router.get("/{lead_id}")
 @safe_endpoint("crm")
-async def get_lead(lead_id: str):
+def get_lead(lead_id: str):
     doc = _col().find_one({"id": lead_id})
     if doc is None:
         raise HTTPException(status_code=404, detail="Lead not found")
@@ -207,7 +207,7 @@ async def get_lead(lead_id: str):
 
 @router.post("")
 @safe_endpoint("crm")
-async def create_lead(body: LeadCreate):
+def create_lead(body: LeadCreate):
     lead = {
         "id": f"L-{uuid.uuid4().hex[:6].upper()}",
         **body.model_dump(),
@@ -222,7 +222,7 @@ async def create_lead(body: LeadCreate):
 
 @router.put("/{lead_id}")
 @safe_endpoint("crm")
-async def update_lead(lead_id: str, body: LeadUpdate):
+def update_lead(lead_id: str, body: LeadUpdate):
     col = _col()
     if col.find_one({"id": lead_id}) is None:
         raise HTTPException(status_code=404, detail="Lead not found")
@@ -238,7 +238,7 @@ async def update_lead(lead_id: str, body: LeadUpdate):
 
 @router.delete("/{lead_id}")
 @safe_endpoint("crm")
-async def delete_lead(lead_id: str):
+def delete_lead(lead_id: str):
     col = _col()
     if col.find_one({"id": lead_id}) is None:
         raise HTTPException(status_code=404, detail="Lead not found")

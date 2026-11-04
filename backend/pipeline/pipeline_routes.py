@@ -232,7 +232,7 @@ def _serialize_run(d: dict) -> dict:
 
 @router.get("/runs")
 @safe_endpoint("pipeline")
-async def list_runs():
+def list_runs():
     docs = list(_runs().find({}))
     docs.sort(key=lambda d: d.get("created_at", ""), reverse=True)
     return {"ok": True, "runs": [_serialize_run(d) for d in docs[:20]]}
@@ -260,7 +260,7 @@ def _batch_query(batch_id: str) -> dict:
 
 @router.get("/pending-leads")
 @safe_endpoint("pipeline")
-async def pending_leads():
+def pending_leads():
     """Batches of verified leads waiting on the CEO, newest first."""
     from crm.leads_model import serialize as ser_lead
     docs = list(_leads().find({"status": "pending_approval"}))
@@ -312,7 +312,7 @@ async def approve_batch(batch_id: str, body: dict | None = None):
 
 @router.post("/pending-leads/{batch_id}/reject")
 @safe_endpoint("pipeline")
-async def reject_batch(batch_id: str):
+def reject_batch(batch_id: str):
     n = _leads().update_many({**_batch_query(batch_id), "status": "pending_approval"}, {"$set": {
         "status": "rejected", "rejection_reason": "rejected_by_ceo",
         "last_action": "Rejected by CEO", "last_action_timestamp": _now()}}).modified_count
