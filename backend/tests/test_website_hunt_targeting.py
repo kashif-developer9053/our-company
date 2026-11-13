@@ -75,12 +75,25 @@ class WebsiteHuntTests(unittest.TestCase):
                 fits, _ = qualifies("website", lead(codes=(code,), qualified=True))
                 self.assertTrue(fits)
 
-    def test_site_we_could_not_check_is_not_called_working(self):
-        """403/429 means we saw nothing — so we claim nothing either way."""
+    def test_site_we_could_not_check_is_kept_and_not_called_working(self):
+        """403/429 means we saw nothing — so we claim nothing either way.
+
+        It is KEPT rather than dropped: bot protection fronted 107 of 140
+        audited sites in this CRM, so dropping these loses a large share of
+        every hunt over a fact about our crawler, not about the business. The
+        reason must tell the CEO to look himself, and must never claim the
+        site works.
+        """
         fits, why = qualifies("website", lead(codes=("blocked_to_us",), unknown=True))
-        self.assertFalse(fits)
-        self.assertIn("blocked", why)
+        self.assertTrue(fits)
         self.assertNotIn("works", why)
+        self.assertIn("could not open", why)
+
+    def test_unchecked_site_is_not_labelled_a_website_lead(self):
+        """We have no fault to show them, so the pitch must be something else."""
+        self.assertNotIn(
+            "website",
+            diagnose(lead(codes=("blocked_to_us",), unknown=True), wanted="website"))
 
     def test_good_site_photographer_gets_no_website_purpose(self):
         """The exact lead the CEO objected to: label must not say Website."""

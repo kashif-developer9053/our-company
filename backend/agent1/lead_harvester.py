@@ -497,7 +497,13 @@ async def harvest_leads(
             _lead_key(l) and _lead_key(l) not in exclude and _lead_key(l) not in pool
             for l in fresh)
 
-        if not sweep and not (maps_was_barren and _SKIP_EXTRA_SOURCES_WHEN_BARREN):
+        # Skip the crawler once Maps starts repeating itself — it asks the
+        # same question of the same town and costs minutes to return the same
+        # nothing. But never skip it on the FIRST round: Maps can repeat
+        # itself immediately in a small town, and bailing out that early meant
+        # the crawler never ran at all for the whole hunt.
+        if not sweep and not (maps_was_barren and rounds_run > 1
+                              and _SKIP_EXTRA_SOURCES_WHEN_BARREN):
             try:
                 say(f"Round {rounds_run}: checking published websites…")
                 mined = await asyncio.wait_for(
@@ -516,8 +522,15 @@ async def harvest_leads(
         #    engines throttle quickly.
         # A sweep has no trade to search social for, and "business in Sialkot"
         # on Facebook returns pages, not businesses.
-        if (rounds_run == 1 and not sweep
-                and not (maps_was_barren and _SKIP_EXTRA_SOURCES_WHEN_BARREN)):
+        # The barren-Maps skip deliberately does NOT apply here. Maps
+        # repeating itself means MAPS is exhausted; it says nothing about
+        # Facebook, which is a different index answering a different
+        # question. Gating this on it meant that in exactly the towns where
+        # Maps runs dry, the one source that finds businesses with NO website
+        # — the strongest website pitch we have — never ran at all, for the
+        # whole hunt. That silently removed our best leads from every hunt in
+        # a small town.
+        if rounds_run == 1 and not sweep:
             try:
                 say("Checking businesses that only have a Facebook page…")
                 social = await asyncio.wait_for(

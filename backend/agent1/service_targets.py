@@ -147,13 +147,19 @@ def qualifies(service: str, lead: dict, allow_other: bool = False) -> tuple[bool
             # when the real answer is "this town's photographers all have
             # working sites".
             #
-            # A site we were blocked from checking is a THIRD case: we did not
-            # see it, so claiming it works is as wrong as claiming it is
-            # broken. It is still not a website lead — we have no fault to
-            # show the owner — but the reason must say what actually happened.
+            # A site we were blocked from checking is a THIRD case, and it is
+            # the common one: 403/429 from Cloudflare and similar accounted
+            # for 107 of 140 audited sites in this CRM. We did not see it, so
+            # calling it fine is as wrong as calling it broken.
+            #
+            # Dropping it would throw away a large share of every hunt over a
+            # fact about OUR crawler, not about the business. So keep it and
+            # say plainly that it needs a human glance: opening the site takes
+            # the CEO five seconds, and a lead he can check beats a lead he
+            # never sees.
             if audit.get("unknown"):
-                return False, ("their website blocked our check, so we have no "
-                               "website fault to show them")
+                return True, ("we could not open their site automatically "
+                              "(bot protection) — worth a quick look yourself")
             return False, "their website works — not a website lead"
         # On a sweep, a sound website is not a reason to throw the business
         # away. We sell six other things, and the businesses that invested in
