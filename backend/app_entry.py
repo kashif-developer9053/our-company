@@ -93,7 +93,11 @@ async def _prune_loop():
         try:
             from shared.database import get_db as _gdb
             cut = (datetime.now(timezone.utc) - timedelta(days=14)).isoformat()
-            n = _gdb()["health_checks"].delete_many({"created_at": {"$lt": cut}}).deleted_count
+            # pymongo blocks, and this loop runs on the event loop, so a slow
+            # Atlas delete would freeze every request in the process.
+            n = (await asyncio.to_thread(
+                _gdb()["health_checks"].delete_many,
+                {"created_at": {"$lt": cut}})).deleted_count
             if n:
                 log.info("Pruned %d health_check rows older than 14 days.", n)
         except Exception as exc:  # noqa: BLE001
@@ -111,8 +115,13 @@ async def _health_check_loop():
             # Weekly Supervisor strategic review (guarded so it runs ~once/week).
             from shared.database import get_db as _gdb
             from supervisor.supervisor_routes import run_strategic_review
-            revs = list(_gdb()["strategic_reviews"].find({}))
-            revs.sort(key=lambda d: d.get("created_at", ""), reverse=True)
+            # Only the newest review decides whether a new one is due, so ask
+            # Atlas for that one row instead of loading the whole collection,
+            # and ask from a thread so the wait does not stall the server.
+            revs = await asyncio.to_thread(
+                lambda: list(_gdb()["strategic_reviews"]
+                             .find({}, {"created_at": 1})
+                             .sort("created_at", -1).limit(1)))
             stale = (not revs) or (revs[0].get("created_at", "") < (datetime.now(timezone.utc) - timedelta(days=7)).isoformat())
             if stale:
                 await run_strategic_review()
@@ -134,8 +143,11 @@ async def _queued_send_loop():
     while True:
         try:
             from agent3.agent3_routes import _drafts, _remaining_cap, _send_approved
-            if _remaining_cap() > 0:
-                waiting = [d["id"] for d in _drafts().find({"status": "approved"}, {"id": 1})]
+            # _remaining_cap() counts today's sends in Mongo, so it blocks too.
+            if await asyncio.to_thread(_remaining_cap) > 0:
+                waiting = await asyncio.to_thread(
+                    lambda: [d["id"] for d in
+                             _drafts().find({"status": "approved"}, {"id": 1})])
                 if waiting:
                     log.info("Resuming %d queued email(s) — daily cap has room again.",
                              len(waiting))
@@ -164,11 +176,15 @@ async def _followup_loop():
 
             # Do not pile drafts on top of an unreviewed queue — a backlog the
             # CEO has not approved means writing more helps nobody.
-            pending = _drafts().count_documents({"status": "pending"})
+            pending = await asyncio.to_thread(
+                _drafts().count_documents, {"status": "pending"})
             if pending >= 40:
                 log.info("Follow-up pass skipped: %d drafts already pending review.", pending)
             else:
-                targets = due_leads(_gdb()["leads"], limit=min(20, 40 - pending))
+                # due_leads scans the leads collection — the single slowest
+                # call in any of these loops, and it ran on the event loop.
+                targets = await asyncio.to_thread(
+                    due_leads, _gdb()["leads"], limit=min(20, 40 - pending))
                 if targets:
                     batch = f"FU-AUTO-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M')}"
                     await _draft_followups_bg(targets, batch)

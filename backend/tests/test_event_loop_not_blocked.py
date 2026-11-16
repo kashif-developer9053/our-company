@@ -181,5 +181,70 @@ class RemainingBlockingCallsTests(unittest.TestCase):
             "Wrap them in `await asyncio.to_thread(...)` instead.")
 
 
+class BackgroundLoopTests(unittest.TestCase):
+    """The long-running loops in app_entry must not block the event loop.
+
+    These were missed by the first pass, which only looked at route handlers.
+    Five loops run forever from lifespan, waking every 2-10 minutes; four of
+    them made synchronous pymongo calls directly on the loop. That froze every
+    request in the process for as long as Atlas took to answer, with no hunt
+    running and nobody logged in - so the app "stuck on loading" on its own.
+
+    The worst two: _health_check_loop ran list(find({})) over every strategic
+    review every 3 minutes, and _followup_loop scanned the whole leads
+    collection via due_leads().
+    """
+
+    LOOPS = ("_prune_loop", "_health_check_loop", "_queued_send_loop",
+             "_followup_loop", "_reply_check_loop")
+
+    def _loop_nodes(self):
+        tree = ast.parse((BACKEND_DIR / "app_entry.py").read_text(encoding="utf-8"))
+        found = {}
+        for node in ast.walk(tree):
+            if isinstance(node, ast.AsyncFunctionDef) and node.name in self.LOOPS:
+                found[node.name] = node
+        return found
+
+    def test_all_loops_were_found(self):
+        """Guard against the loops being renamed and the check going quiet."""
+        self.assertEqual(set(self._loop_nodes()), set(self.LOOPS))
+
+    def test_no_loop_calls_mongo_on_the_event_loop(self):
+        """Every blocking DB call in a loop must be inside asyncio.to_thread."""
+        offenders = []
+        for name, node in self._loop_nodes().items():
+            for sub in ast.walk(node):
+                if not (isinstance(sub, ast.Call)
+                        and isinstance(sub.func, ast.Attribute)
+                        and sub.func.attr in _BLOCKING_DB_CALLS):
+                    continue
+                # Walk up: a call wrapped in to_thread(...) is fine. The AST
+                # gives no parent pointers, so test the enclosing source.
+                src = ast.unparse(node)
+                if "to_thread" not in src:
+                    offenders.append(f"{name}:{sub.func.attr}")
+        self.assertEqual(
+            offenders, [],
+            "These background loops make blocking Mongo calls with no "
+            "asyncio.to_thread anywhere in the function, so they stall every "
+            "request while the query runs:\n  " + "\n  ".join(offenders))
+
+    def test_each_blocking_loop_uses_to_thread(self):
+        """Per-loop, so a regression names the loop that broke."""
+        for name, node in self._loop_nodes().items():
+            src = ast.unparse(node)
+            has_db = any(
+                isinstance(sub, ast.Call) and isinstance(sub.func, ast.Attribute)
+                and sub.func.attr in _BLOCKING_DB_CALLS
+                for sub in ast.walk(node))
+            if not has_db:
+                continue
+            with self.subTest(loop=name):
+                self.assertIn(
+                    "to_thread", src,
+                    f"{name} does blocking DB work on the event loop")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
