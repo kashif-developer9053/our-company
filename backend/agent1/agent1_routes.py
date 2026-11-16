@@ -380,8 +380,19 @@ def hunt_status(run_id: str):
     """
     run = _hunt_runs().get(run_id)
     if not run:
-        return {"ok": False, "error": "That hunt is not running — it may have "
-                                      "finished before a restart, or already been cleared."}
+        # The run store is in memory, so an API restart loses it — and the
+        # hunt's asyncio task died with the old process. The UI polling this
+        # run_id would otherwise keep asking forever and sit on a spinner, so
+        # answer definitively: this hunt is over.
+        #
+        # `status: "gone"` rather than ok:False, because the page needs to
+        # leave its busy state, not show a transient error and keep waiting.
+        return {"ok": True, "id": run_id, "status": "gone", "found": 0, "added": 0,
+                "complete": False,
+                "message": ("That hunt is no longer running — the server "
+                            "restarted while it was working. Any leads it had "
+                            "already staged are saved; start a new hunt to "
+                            "collect more.")}
     return {"ok": True, **run}
 
 

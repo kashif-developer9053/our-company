@@ -135,15 +135,34 @@ export default function LeadHunter({ onDone }: { onDone?: () => void }) {
   };
 
   const pollHunt = async (runId: string, n: string) => {
+    // A blip should not kill the hunt view, but it must not spin forever
+    // either. This loop used to `continue` on every failure with no limit, so
+    // if the API restarted or the network dropped, the page sat on "Hunting…"
+    // for good with no error and no way back — the stuck spinner.
+    let failures = 0;
+    const MAX_FAILURES = 5;                   // ~20s of silence at 4s a poll
     for (;;) {
       await new Promise((r) => setTimeout(r, 4000));
       let st;
-      try { st = await api.getHuntStatus(runId); }
-      catch { continue; }                     // a blip should not kill the hunt view
+      try {
+        st = await api.getHuntStatus(runId);
+        failures = 0;                         // a good answer clears the streak
+      } catch {
+        if (++failures >= MAX_FAILURES) {
+          setErr("Lost contact with the server while hunting. The hunt may "
+                 + "still be running — reload the page to pick it back up.");
+          return;
+        }
+        continue;
+      }
       if (!st.ok) { setErr(st.error || "Lost track of that hunt."); return; }
       if (st.message) setLive(st.message);
       if (st.status === "running") continue;
       if (st.status === "error") { setErr(st.error || st.message || "Hunt failed."); return; }
+      // The API restarted mid-hunt, so the run — and its background task — are
+      // gone. Falling through to setResult would report "0 leads found", which
+      // is not what happened; say so plainly and release the spinner.
+      if (st.status === "gone") { setErr(st.message || "That hunt is no longer running."); return; }
 
       setResult({
         found: st.found ?? 0, target: st.target ?? target, complete: !!st.complete,

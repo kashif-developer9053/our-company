@@ -544,7 +544,8 @@ export const harvestLeads = (body: {
 // the UI polls hunt-status. Nginx closes a proxied request after 600s, and a
 // hunt can legitimately run an hour — that mismatch was the 504.
 export interface HuntStatus {
-  ok: boolean; status?: "running" | "done" | "error" | "stopped";
+  // "gone" means the API restarted and lost the run; the hunt is over.
+  ok: boolean; status?: "running" | "done" | "error" | "stopped" | "gone";
   // Present on a hunt the page is rejoining after a reload, so it can show
   // what is being hunted without the form state that started it.
   id?: string; niche?: string; where?: string; started_at?: string;
