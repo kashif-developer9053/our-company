@@ -25,6 +25,12 @@ _UA = (
 )
 
 
+# How many business detail pages to read at once. Each is an independent URL,
+# so waiting for them one at a time was pure latency: the server sat idle
+# between round trips to Google. Four tabs is what a person browsing has open.
+_DETAIL_CONCURRENCY = 4
+
+
 async def _pause(a: float = 1.0, b: float = 4.0) -> None:
     await asyncio.sleep(random.uniform(a, b))
 
@@ -69,10 +75,31 @@ async def scrape_google_maps(query: str, max_results: int = 20) -> dict:
                 "--disable-gpu",
             ])
             context = await browser.new_context(user_agent=_UA, viewport={"width": 1280, "height": 900}, locale="en-US")
+
+            # Block everything we do not read. Maps is a MAP: it pulls down
+            # tiles, photos, icons and fonts by the megabyte, and this scraper
+            # wants four strings per business — name, phone, website, rating.
+            # Measured from the VPS, a Lahore search took 39s with all of it
+            # and a Memphis search never finished inside 75s at all, which is
+            # what made worldwide hunting fail while the home market worked.
+            #
+            # The HTML and the scripts that build the results feed still load;
+            # only the pixels are refused.
+            async def _block_heavy(route) -> None:
+                if route.request.resource_type in {"image", "media", "font", "stylesheet"}:
+                    await route.abort()
+                else:
+                    await route.continue_()
+
+            await context.route("**/*", _block_heavy)
+
             page = await context.new_page()
             await page.goto(f"https://www.google.com/maps/search/{query.replace(' ', '+')}",
                             wait_until="domcontentloaded", timeout=45000)
-            await _pause(2, 4)
+            # Was 2-4s. The pause exists to look human and to let the feed
+            # render; with images blocked the feed is ready sooner, and the
+            # explicit feed.wait_for() below is what actually guarantees it.
+            await _pause(1, 2)
 
             # Consent wall?
             if "consent.google.com" in page.url:
@@ -128,15 +155,45 @@ async def scrape_google_maps(query: str, max_results: int = 20) -> dict:
                     targets.append((name, href, card_text))
 
             # Visit each place to read phone + website from the detail panel.
-            for name, href, card_text in targets:
-                try:
-                    await page.goto(href, wait_until="domcontentloaded", timeout=30000)
-                    await _pause(0.4, 1.1)
-                    phone = await _extract_phone(page)
-                    website = await _extract_website(page)
-                    leads.append(_build_lead(name, card_text, phone, website))
-                except Exception as exc:  # noqa: BLE001 - skip one bad place, continue
-                    log.warning("Skipping place '%s': %s", name[:40], exc)
+            #
+            # These were done strictly one after another on a single tab, so
+            # 20 businesses meant 20 sequential page loads plus 20 pauses —
+            # the bulk of the 39s a Lahore search took, and the reason a
+            # Memphis search never finished. They are independent reads of
+            # independent URLs, so they run in parallel now, a few tabs at a
+            # time.
+            #
+            # _DETAIL_CONCURRENCY is deliberately modest: the point is to stop
+            # waiting on round trips, not to hammer Google. Four tabs is a
+            # browser with four tabs open, which is what a person has.
+            sem = asyncio.Semaphore(_DETAIL_CONCURRENCY)
+
+            async def _detail(name: str, href: str, card_text: str):
+                async with sem:
+                    tab = None
+                    try:
+                        tab = await context.new_page()
+                        await tab.goto(href, wait_until="domcontentloaded", timeout=30000)
+                        await _pause(0.3, 0.8)
+                        phone = await _extract_phone(tab)
+                        website = await _extract_website(tab)
+                        return _build_lead(name, card_text, phone, website)
+                    except Exception as exc:  # noqa: BLE001 - one bad place is survivable
+                        log.warning("Skipping place '%s': %s", name[:40], exc)
+                        return None
+                    finally:
+                        # A leaked tab is a leaked renderer process. With dozens
+                        # of rounds a hunt would walk the server's memory up.
+                        if tab is not None:
+                            try:
+                                await tab.close()
+                            except Exception:  # noqa: BLE001
+                                pass
+
+            results = await asyncio.gather(
+                *(_detail(n, h, c) for n, h, c in targets),
+                return_exceptions=True)
+            leads.extend(r for r in results if isinstance(r, dict))
 
         return {"ok": True, "blocked": False, "message": f"Scraped {len(leads)} businesses.", "leads": leads}
     except Exception as exc:  # noqa: BLE001

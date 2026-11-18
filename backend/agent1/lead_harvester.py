@@ -258,6 +258,33 @@ _PER_ROUND = 40
 # finishes in well under a minute; one still going at 75s is wedged, not slow.
 _SOURCE_TIMEOUT = 75   # seconds for one source in one round
 
+# ...but 75s is measured from HERE. On 2026-11-18 a Memphis search timed out
+# at 75s while a Lahore search returned five leads in 39s from the same
+# server. The scraper was not wedged; the round trip to US results is simply
+# longer, and 39s working leaves very little headroom. A hunt outside the home
+# region was therefore failing on the clock, reporting it as an empty market.
+#
+# So distant work gets more time. With images blocked and detail pages read in
+# parallel (see scraper.py) the usual case got much faster, and this ceiling is
+# now only for the genuinely slow far-away query.
+_SOURCE_TIMEOUT_FAR = 140
+
+# Where we are. Queries inside this country use the normal timeout; everything
+# else gets the longer one, because distance to the result is the thing being
+# paid for.
+_HOME_COUNTRY = "pakistan"
+
+# Consecutive rounds in which EVERY source timed out before we stop and say
+# so. Two is enough to tell a blip from a pattern, and stopping there saves
+# the four further rounds that taught us nothing about Memphis.
+_TIMEOUT_ROUNDS_LIMIT = 2
+
+
+def _timeout_for(where: str) -> int:
+    """How long one source may take, given where we are searching."""
+    return (_SOURCE_TIMEOUT if _HOME_COUNTRY in (where or "").lower()
+            else _SOURCE_TIMEOUT_FAR)
+
 # A whole round, all sources together. Even with each source under its own
 # ceiling the round as a whole has to be bounded, or a slow-but-not-timing-out
 # source on every one of 28 templates adds up to the full hour.
@@ -436,6 +463,17 @@ async def harvest_leads(
                 "wrong_contact_type": 0}
     rounds_run = 0
     barren_rounds = 0  # consecutive rounds that surfaced no new businesses
+    # Consecutive rounds where EVERY source timed out, i.e. nothing was
+    # searched at all. Counted separately from barren rounds because the two
+    # mean opposite things: barren says the market is thin, this says our
+    # scraper never got an answer. Conflating them is what produced "this
+    # niche/area looks exhausted" for Memphis, a city full of clinics.
+    timeout_rounds = 0
+
+    # Distant searches are slower, so they get longer before we call it a
+    # timeout. See _timeout_for: Memphis failing at 75s while Lahore worked at
+    # 39s is what this exists for.
+    _src_timeout = _timeout_for(where)
 
     def say(msg: str) -> None:
         log.info(msg)
@@ -459,11 +497,16 @@ async def harvest_leads(
         say(f"Round {rounds_run}: searching '{query}' ({len(qualified)}/{target} qualified so far)")
 
         fresh: list[dict] = []
+        # Did any source actually ANSWER this round, or did they all time out?
+        # "Answered with nothing" and "never answered" look identical in the
+        # result list and mean opposite things, so they are counted apart.
+        any_source_answered = False
         # 1) Google Maps (good for phone numbers + addresses)
         try:
             maps = await asyncio.wait_for(
                 scrape_google_maps(query, max_results=_PER_ROUND),
-                timeout=_SOURCE_TIMEOUT)
+                timeout=_src_timeout)
+            any_source_answered = True
             if maps.get("ok"):
                 got = maps.get("leads", [])
                 fresh.extend(got)
@@ -508,7 +551,8 @@ async def harvest_leads(
                 say(f"Round {rounds_run}: checking published websites…")
                 mined = await asyncio.wait_for(
                     mine_business_websites(query, max_results=_PER_ROUND),
-                    timeout=_SOURCE_TIMEOUT)
+                    timeout=_src_timeout)
+                any_source_answered = True
                 if mined.get("ok"):
                     fresh.extend(mined.get("leads", []))
             except asyncio.TimeoutError:
@@ -535,7 +579,8 @@ async def harvest_leads(
                 say("Checking businesses that only have a Facebook page…")
                 social = await asyncio.wait_for(
                     discover_social_businesses(niche, where, max_results=_PER_ROUND),
-                    timeout=_SOURCE_TIMEOUT)
+                    timeout=_src_timeout)
+                any_source_answered = True
                 if social.get("ok") and social.get("leads"):
                     fresh.extend(social["leads"])
                     say(f"Social search added {len(social['leads'])} businesses with no website.")
@@ -545,6 +590,9 @@ async def harvest_leads(
                 log.error("Social mining failed (isolated): %s", exc)
 
         # Drop anything already collected in a previous run or round.
+        # Count the round as a timeout round only if NOTHING answered.
+        timeout_rounds = 0 if any_source_answered else timeout_rounds + 1
+
         raw_count = len(fresh)
         fresh = [l for l in fresh if _lead_key(l) and _lead_key(l) not in exclude and _lead_key(l) not in pool]
         if not fresh:
@@ -557,6 +605,17 @@ async def harvest_leads(
             # when almost nothing has been found the remaining templates are
             # exactly what might work, so push on through the empty ones.
             limit = _BARREN_LIMIT if len(qualified) >= _PERSIST_UNTIL else _BARREN_LIMIT_THIN
+            # A round where every source TIMED OUT is not evidence about the
+            # market — it is evidence about our connection to it. Reporting
+            # "this niche/area looks exhausted" after six such rounds told the
+            # CEO there were no clinics in Memphis, which is false and is an
+            # expensive thing to believe. Stop sooner, and say the true reason.
+            if timeout_rounds >= _TIMEOUT_ROUNDS_LIMIT:
+                say(f"Every search source timed out on {timeout_rounds} rounds in a row — "
+                    f"this is a speed problem on our side, NOT an empty market. "
+                    f"Nothing was actually searched. Try again, or try a city "
+                    f"closer to home if it keeps happening.")
+                break
             if barren_rounds >= limit:
                 say(f"{barren_rounds} rounds with no new businesses and "
                     f"{len(qualified)} qualified so far — this niche/area looks exhausted. "
@@ -571,7 +630,7 @@ async def harvest_leads(
             say(f"Round {rounds_run}: looking up contact details for "
                 f"{len(fresh)} businesses…")
             await asyncio.wait_for(enrich_lead_emails(fresh, concurrency=8),
-                                   timeout=_SOURCE_TIMEOUT)
+                                   timeout=_src_timeout)
         except asyncio.TimeoutError:
             say(f"Round {rounds_run}: contact lookup took too long — "
                 f"keeping what it found.")
@@ -587,7 +646,7 @@ async def harvest_leads(
             await asyncio.wait_for(
                 audit_leads(fresh, concurrency=_AUDIT_CONCURRENCY,
                             set_reason=is_website_service(service)),
-                timeout=_SOURCE_TIMEOUT)
+                timeout=_src_timeout)
         except asyncio.TimeoutError:
             say(f"Round {rounds_run}: website checks took too long — "
                 f"keeping what finished.")
@@ -648,7 +707,7 @@ async def harvest_leads(
             try:
                 mres = await asyncio.wait_for(
                     scrape_google_maps(query, max_results=_PER_ROUND),
-                    timeout=_SOURCE_TIMEOUT)
+                    timeout=_src_timeout)
                 if mres.get("ok"):
                     wider.extend(mres.get("leads", []))
             except Exception as exc:  # noqa: BLE001
@@ -657,7 +716,7 @@ async def harvest_leads(
                 if not sweep:
                     wres = await asyncio.wait_for(
                         mine_business_websites(query, max_results=_PER_ROUND),
-                        timeout=_SOURCE_TIMEOUT)
+                        timeout=_src_timeout)
                     if wres.get("ok"):
                         wider.extend(wres.get("leads", []))
             except Exception as exc:  # noqa: BLE001
