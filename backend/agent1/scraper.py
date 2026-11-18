@@ -27,8 +27,28 @@ _UA = (
 
 # How many business detail pages to read at once. Each is an independent URL,
 # so waiting for them one at a time was pure latency: the server sat idle
-# between round trips to Google. Four tabs is what a person browsing has open.
-_DETAIL_CONCURRENCY = 4
+# between round trips to Google.
+#
+# Measured on the VPS, 5 results, single runs:
+#   sequential, nothing blocked ........ Lahore 39s, Memphis timed out at 75s
+#   4 tabs, css+images+fonts blocked ... Lahore 54s, Memphis 62s
+# So the change rescued the distant query and cost the near one. Each tab is a
+# renderer process, and on a small VPS four of them contend for CPU rather
+# than overlapping network waits. Two still overlaps the round trips without
+# starving the box.
+_DETAIL_CONCURRENCY = 2
+
+# Resource types refused in the Maps tab. Images, media and fonts are pure
+# bytes we never read — blocking them is what let a Memphis search finish at
+# all (it had been timing out at 75s).
+#
+# Stylesheets are NOT blocked, though the first version of this did block
+# them. Maps lays the results feed out with CSS, and the selectors here wait
+# on that feed — so refusing stylesheets risks paying in settling time what it
+# saves in download. Suspected (not yet proven) to be part of why the Lahore
+# query got slower; the measurement that settles it is a before/after on the
+# VPS, since this machine cannot reach Google.
+_BLOCKED_RESOURCES = {"image", "media", "font"}
 
 
 async def _pause(a: float = 1.0, b: float = 4.0) -> None:
@@ -86,7 +106,7 @@ async def scrape_google_maps(query: str, max_results: int = 20) -> dict:
             # The HTML and the scripts that build the results feed still load;
             # only the pixels are refused.
             async def _block_heavy(route) -> None:
-                if route.request.resource_type in {"image", "media", "font", "stylesheet"}:
+                if route.request.resource_type in _BLOCKED_RESOURCES:
                     await route.abort()
                 else:
                     await route.continue_()
