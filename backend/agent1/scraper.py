@@ -29,25 +29,31 @@ _UA = (
 # so waiting for them one at a time was pure latency: the server sat idle
 # between round trips to Google.
 #
-# Measured on the VPS, 5 results, single runs:
-#   sequential, nothing blocked ........ Lahore 39s, Memphis timed out at 75s
-#   4 tabs, css+images+fonts blocked ... Lahore 54s, Memphis 62s
-# So the change rescued the distant query and cost the near one. Each tab is a
-# renderer process, and on a small VPS four of them contend for CPU rather
-# than overlapping network waits. Two still overlaps the round trips without
-# starving the box.
-_DETAIL_CONCURRENCY = 2
+# Measured on the VPS against Lahore, 5 results, three runs each:
+#   css blocked, 4 tabs ... [60, 47, 42]  avg 50s
+#   css allowed, 4 tabs ... [40, 43, 44]  avg 42s   <- kept
+#   css allowed, 2 tabs ... [42, 61, 41]  avg 48s
+#
+# Four tabs beat two, so the earlier guess that a small VPS would contend on
+# renderer processes was wrong — the time is spent waiting on Google, not on
+# CPU, and more overlap helps.
+#
+# Read the spread, not just the average: one run of the last config took 61s
+# while two took ~41s. Google's own variance is ±20s, wider than the gap
+# between these settings, so treat 42 vs 48 as "no worse" rather than proof.
+# Anything tuned here needs three runs minimum, or it is noise.
+_DETAIL_CONCURRENCY = 4
 
 # Resource types refused in the Maps tab. Images, media and fonts are pure
 # bytes we never read — blocking them is what let a Memphis search finish at
 # all (it had been timing out at 75s).
 #
-# Stylesheets are NOT blocked, though the first version of this did block
-# them. Maps lays the results feed out with CSS, and the selectors here wait
-# on that feed — so refusing stylesheets risks paying in settling time what it
-# saves in download. Suspected (not yet proven) to be part of why the Lahore
-# query got slower; the measurement that settles it is a before/after on the
-# VPS, since this machine cannot reach Google.
+# Stylesheets are NOT blocked, and that is measured, not assumed: blocking
+# them cost 8s on average (50s vs 42s, three runs each). Maps lays the results
+# feed out with CSS and the selectors here wait on that feed, so refusing
+# stylesheets pays more in settling time than it saves in download. They were
+# blocked in the first version of this change, which is what made a Lahore
+# search slower than before the whole exercise started.
 _BLOCKED_RESOURCES = {"image", "media", "font"}
 
 
