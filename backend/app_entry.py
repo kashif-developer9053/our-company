@@ -294,7 +294,18 @@ app.include_router(users_router)  # per-endpoint guards (admin ops + self-servic
 @safe_endpoint("app")
 async def health():
     # Open, unauthenticated health check (no sensitive data).
-    return {"ok": True, "storage": backend_name(), "encryption_secret_set": encryption_secret_is_set()}
+    #
+    # This MUST answer even when the database is unreachable, and it must say
+    # so. On 2026-11-16 Atlas stopped answering, every request hung, and this
+    # endpoint hung with them — so from the outside a database outage was
+    # indistinguishable from a dead application, and the first three rounds of
+    # diagnosis went looking in the wrong place. `database` below is what tells
+    # those two apart: ok:true with database.open:true means the app is alive
+    # and Mongo is not.
+    from shared.database import breaker_state
+    return {"ok": True, "storage": backend_name(),
+            "encryption_secret_set": encryption_secret_is_set(),
+            "database": breaker_state()}
 
 
 # ---- intentional-failure endpoint (proves module isolation) ----------------

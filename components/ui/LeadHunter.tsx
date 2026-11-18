@@ -25,6 +25,17 @@ export default function LeadHunter({ onDone }: { onDone?: () => void }) {
   const [niche, setNiche] = useState("");
   const [city, setCity] = useState("");
   const [country, setCountry] = useState("");
+  // City -> country, so typing a city fills the country in. The CEO asked for
+  // this after a hunt ran on "Islamabad, India": a pair like that returns
+  // nothing and reads as "no market here", which is a costly thing to believe.
+  // Suggesting the country as the city is typed removes the mistake instead of
+  // reporting it afterwards.
+  const [cityMap, setCityMap] = useState<Record<string, string>>({});
+  const [cityList, setCityList] = useState<string[]>([]);
+  // True while the country shown was filled in by us rather than typed. Only
+  // our own suggestion may be overwritten by a later one — once the CEO edits
+  // the field by hand it is his, and we leave it alone.
+  const [autoCountry, setAutoCountry] = useState(false);
   const [target, setTarget] = useState(50);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -55,8 +66,42 @@ export default function LeadHunter({ onDone }: { onDone?: () => void }) {
   const [resumed, setResumed] = useState<string>("");
   useEffect(() => {
     api.getServices().then((r) => setServices(r.services ?? [])).catch(() => {});
+    // Fetched once, then held in memory: the country fills in on every
+    // keystroke with no request per character. Failing is harmless — both
+    // fields stay plain text boxes and the backend still refuses a pair it
+    // knows is wrong.
+    api.getLocations()
+      .then((r) => { setCityMap(r.map ?? {}); setCityList(r.cities ?? []); })
+      .catch(() => {});
   }, []);
   const chosen = services.find((s) => s.key === service);
+
+  // Typing a city fills the country in. Matching is case- and
+  // spacing-insensitive, so "  lahore" works as well as "Lahore".
+  const onCityChange = (value: string) => {
+    setCity(value);
+    const key = value.trim().toLowerCase().replace(/\s+/g, " ");
+    const hit = Object.keys(cityMap).find((c) => c.toLowerCase() === key);
+    const found = hit ? cityMap[hit] : "";
+    // Fill an empty country, or replace one WE filled in. A country the CEO
+    // typed himself is never overwritten: he may be hunting an area this
+    // small gazetteer has never heard of, and silently "correcting" him would
+    // send the hunt somewhere he did not ask for.
+    if (found && (!country.trim() || autoCountry)) {
+      setCountry(found);
+      setAutoCountry(true);
+    }
+  };
+
+  // A pair the gazetteer says cannot be right. Shown as a warning under the
+  // form; the backend refuses it outright, so this is the early, friendlier
+  // half of the same check.
+  const cityKey = city.trim().toLowerCase().replace(/\s+/g, " ");
+  const cityHit = Object.keys(cityMap).find((c) => c.toLowerCase() === cityKey);
+  const trueCountry = cityHit ? cityMap[cityHit] : "";
+  const countryMismatch = Boolean(
+    trueCountry && country.trim() &&
+    trueCountry.toLowerCase() !== country.trim().toLowerCase());
 
   // Agent 1 publishes its progress to the status board while hunting; poll it
   // so a multi-round hunt shows what it is doing instead of a bare spinner.
@@ -327,19 +372,37 @@ export default function LeadHunter({ onDone }: { onDone?: () => void }) {
           <input className="af-input" placeholder="Niche (e.g. dental clinic)" value={niche}
             onChange={(e) => setNiche(e.target.value)} disabled={busy} />
         )}
-        <input className="af-input"
+        <input className="af-input" list="hunt-cities"
           placeholder={mode === "niche" ? "City (optional)" : "City (e.g. Gujranwala)"}
-          value={city} onChange={(e) => setCity(e.target.value)} disabled={busy} />
+          value={city} onChange={(e) => onCityChange(e.target.value)} disabled={busy} />
+        <datalist id="hunt-cities">
+          {cityList.map((c) => <option key={c} value={c} />)}
+        </datalist>
         <input className="af-input"
           placeholder={mode === "niche" ? "Country (optional)" : "Country"}
-          value={country} onChange={(e) => setCountry(e.target.value)} disabled={busy} />
+          value={country} onChange={(e) => { setCountry(e.target.value); setAutoCountry(false); }}
+          disabled={busy} />
         <input className="af-input" type="number" min={1} max={200} style={{ width: 90 }} value={target}
           onChange={(e) => setTarget(Number(e.target.value))} disabled={busy} title="How many qualified leads" />
         <button className="btn-mini primary" onClick={() => run()}
-          disabled={busy || (mode === "niche" ? !niche.trim() : !city.trim() && !country.trim())}>
+          disabled={busy || countryMismatch
+            || (mode === "niche" ? !niche.trim() : !city.trim() && !country.trim())}>
           {busy ? "Hunting…" : `Find ${target} leads`}
         </button>
       </div>
+
+      {countryMismatch && (
+        // Blocks the hunt rather than warning and running it anyway. A hunt on
+        // the wrong country burns several minutes and comes back empty, and an
+        // empty result looks like a verdict on the market rather than a typo.
+        <p className="hunt-note" style={{ color: "#f2c14e" }}>
+          {city.trim()} is in {trueCountry}, not {country.trim()}.{" "}
+          <button className="btn-mini" style={{ marginLeft: 6 }}
+            onClick={() => { setCountry(trueCountry); setAutoCountry(true); }}>
+            Use {trueCountry}
+          </button>
+        </p>
+      )}
 
       {busy && (
         <div className="hunt-busy">

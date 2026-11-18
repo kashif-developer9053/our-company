@@ -29,6 +29,26 @@ async def _pause(a: float = 1.0, b: float = 4.0) -> None:
     await asyncio.sleep(random.uniform(a, b))
 
 
+async def _launch_browser(playwright):
+    """Launch headless Chromium with the flags a server actually needs.
+
+    website_miner's contact fallback has always imported this name, but it
+    never existed, so every hunt logged "Browser contact fallback unavailable:
+    cannot import name '_launch_browser'" and silently skipped rendering
+    JavaScript-only contact pages. The flags below were already duplicated
+    inline in scrape_google_maps; this is now the one definition both use.
+
+    --no-sandbox / --disable-dev-shm-usage are required on a headless Linux
+    server: the Chromium sandbox needs privileges a systemd service does not
+    have, and the default /dev/shm is too small for Chromium.
+    """
+    return await playwright.chromium.launch(headless=True, args=[
+        "--no-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-gpu",
+    ])
+
+
 async def scrape_google_maps(query: str, max_results: int = 20) -> dict:
     """Return {ok, blocked, message, leads:[...]}. Never raises."""
     try:

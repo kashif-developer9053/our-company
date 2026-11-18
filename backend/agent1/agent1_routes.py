@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import time
 import uuid
 from datetime import datetime, timezone
 
@@ -413,6 +414,20 @@ def services():
     ]}
 
 
+@router.get("/locations")
+@safe_endpoint("agent1")
+def locations():
+    """Cities the hunt form can suggest, with the country each one is in.
+
+    Served once and cached by the form, so typing a city fills the country in
+    without a round trip per keystroke. This is what stops "Islamabad, India"
+    being possible to type at all.
+    """
+    from .locations import CITY_COUNTRY, known_cities
+    return {"ok": True, "cities": known_cities(),
+            "map": {c.title(): v for c, v in CITY_COUNTRY.items()}}
+
+
 @router.get("/niche-performance")
 @safe_endpoint("agent1")
 def niche_performance():
@@ -455,6 +470,18 @@ async def harvest_leads_route(body: HarvestBody):
                                        "This mode picks the business types itself.")}
     if mode == "niche" and not body.niche.strip():
         return {"ok": False, "error": "Name a business type, or switch to another mode."}
+
+    # A city/country pair that cannot be right. The form fills the country in
+    # as you type, so this should be unreachable from the UI — it is here for
+    # the API, for an older cached page, and for the saved search that pins a
+    # mistake in place. Searching "Islamabad, India" does not fail loudly: it
+    # quietly returns nothing, and "no leads in Islamabad" is a false
+    # conclusion that is expensive to believe.
+    if body.city and body.country:
+        from .locations import mismatch
+        problem = mismatch(body.city, body.country)
+        if problem:
+            return {"ok": False, "error": problem}
 
     # "Find more" tops up toward the target rather than restarting from zero.
     already = 0
@@ -664,6 +691,10 @@ async def _run_hunt(run_id: str, body: "HarvestBody", target: int, already: int,
 
     loop = asyncio.get_running_loop()
 
+    # Status-board writes are throttled to this interval (see progress()).
+    _BOARD_WRITE_EVERY = 5.0
+    _last_board_write = 0.0
+
     def progress(msg: str) -> None:
         """Report live hunt progress without stalling the whole server.
 
@@ -680,6 +711,22 @@ async def _run_hunt(run_id: str, body: "HarvestBody", target: int, already: int,
         """
         if run_id in runs:
             runs[run_id]["message"] = msg[:200]
+        # THROTTLE. The line above is what the leads page actually reads, and
+        # it is a dict write, so the page stays live at full detail. The Mongo
+        # write below only feeds the office avatar's caption, which no one
+        # reads at 150 updates a hunt.
+        #
+        # Unthrottled this was ~150 Atlas writes per hunt. None of them blocked
+        # the loop (they run in the executor), but during the 2026-11-16 outage
+        # each one occupied a pool thread for the full socket timeout, and 150
+        # of those exhaust the executor — at which point work that genuinely
+        # needs a thread waits behind narration nobody is looking at. One write
+        # every few seconds carries the same information at ~20 writes a hunt.
+        nonlocal _last_board_write
+        now = time.monotonic()
+        if now - _last_board_write < _BOARD_WRITE_EVERY:
+            return
+        _last_board_write = now
         try:
             loop.run_in_executor(None, _set_status, "working", msg[:120])
         except RuntimeError:

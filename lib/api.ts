@@ -589,6 +589,12 @@ export interface ServiceTarget {
 export const getServices = () =>
   req<{ ok: boolean; services: ServiceTarget[] }>("/agent1/services");
 
+// Cities the hunt form can suggest, and the country each one is in, so typing
+// a city fills the country in and "Islamabad, India" cannot be submitted.
+export const getLocations = () =>
+  req<{ ok: boolean; cities: string[]; map: Record<string, string> }>(
+    "/agent1/locations");
+
 export const getNicheProgress = (niche: string, city = "", country = "") =>
   req<{ ok: boolean; niche: string; collected: number; pending_approval: number;
         approved: number; rejected: number }>(

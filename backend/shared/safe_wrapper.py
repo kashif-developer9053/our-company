@@ -66,6 +66,19 @@ def safe_endpoint(module: str) -> Callable:
         log = get_logger(module)
 
         def _fail(exc: Exception) -> JSONResponse:
+            # The database being unreachable is not a bug in this module, and
+            # dumping a traceback for it buries the real signal under noise
+            # during an outage. Answer 503 with a plain sentence the CEO can
+            # act on: it is temporary, nothing is lost, try again shortly.
+            from .database import DatabaseUnavailable
+            if isinstance(exc, DatabaseUnavailable):
+                log.warning("%s.%s: database unavailable (breaker open)",
+                            module, handler.__name__)
+                return JSONResponse(
+                    status_code=503,
+                    content={"ok": False, "module": module, "database_down": True,
+                             "error": str(exc)},
+                )
             log.error(
                 "Unhandled error in %s.%s: %s\n%s",
                 module,
