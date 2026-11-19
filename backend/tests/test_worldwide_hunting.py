@@ -172,28 +172,207 @@ class ScraperSpeedTests(unittest.TestCase):
             with self.subTest(kind=kind):
                 self.assertIn(f'"{kind}"', src, f"{kind} requests should be aborted")
 
-    def test_detail_pages_are_read_in_parallel(self):
-        """20 businesses meant 20 sequential page loads — most of the 39s.
+    def test_contact_details_come_from_the_results_page(self):
+        """No per-business detail page. That stage was the entire cost.
 
-        They are independent URLs, so the only thing being paid for was round
-        trip latency, one at a time.
+        Timed on the VPS 2026-11-19, Lahore, 5 results:
+            search page + feed ready ......  11s
+            5 detail pages, 4 in parallel ..  30s   (24-28s EACH)
+
+        Every tab took the same ~25s, so they were not queueing - each detail
+        page is simply slow. That is why 2 tabs and 4 tabs measured identically
+        (56s vs 57s avg, three runs each): parallelism was already saturated
+        and there was nothing left for tuning to win.
+
+        The results page already carries name, rating, reviews, category,
+        address, phone and website for every business, so the whole stage was
+        removable. One page load instead of one-per-business is also what makes
+        distant hunting viable: distance is paid once, not N times.
         """
         src = self._source()
-        self.assertIn("_DETAIL_CONCURRENCY", src)
-        self.assertIn("asyncio.gather", src,
-                      "detail pages must be fetched concurrently")
-        self.assertGreaterEqual(
-            __import__("agent1.scraper", fromlist=["x"])._DETAIL_CONCURRENCY, 2,
-            "concurrency below 2 is sequential with extra steps")
+        self.assertIn("_phone_from_card", src,
+                      "the phone must be read from the result card")
+        self.assertNotIn(
+            "_DETAIL_CONCURRENCY", src,
+            "per-business detail pages are gone; the knob should go with them")
+        self.assertNotIn(
+            "await tab.goto(", src,
+            "opening a tab per business is the 30s stage that was removed")
 
-    def test_tabs_are_closed(self):
-        """A leaked tab is a leaked renderer process.
+    def test_the_card_is_more_complete_than_the_detail_panel_was(self):
+        """The old path also LOST data, which matters more than the speed.
 
-        A hunt runs dozens of rounds; leaking a tab per business is how the
-        server's memory walks up until nothing can be served.
+        Of 5 detail panels, only 3 exposed a phone button, while all 8 cards
+        in the same search showed a phone. Two businesses were being stored
+        with no phone number that Google was displaying all along.
+        """
+        from agent1.scraper import _build_lead, _phone_from_card
+
+        card = ("DH Dental Clinic\n"
+                "DH Dental Clinic\n"
+                "4.9(78)\n"
+                "Dental clinic \u00b7  \u00b7 152 G1 Canal Rd\n"
+                "Open \u00b7 Closes 6 PM \u00b7 +92 322 3368251\n\n"
+                "Website\n\nDirections")
+        lead = _build_lead("DH Dental Clinic", card,
+                           _phone_from_card(card), "http://www.dh.dental/")
+        self.assertEqual(lead["phone"], "+92 322 3368251")
+        self.assertEqual(lead["category"], "Dental clinic")
+        self.assertEqual(lead["address"], "152 G1 Canal Rd")
+        self.assertEqual(lead["rating"], 4.9)
+        self.assertEqual(lead["reviews_count"], 78)
+
+    def test_the_category_is_not_the_business_name(self):
+        """A card prints the business name TWICE, on lines 1 and 2.
+
+        The old extractor skipped only line 1 and took the next short line
+        with letters, so it returned the business name as the category for
+        every lead in the database. The address was never read at all.
+        """
+        from agent1.scraper import _category_and_address
+
+        for name, text, cat, addr in [
+            ("Smile Hub Clinics",
+             "Smile Hub Clinics\nSmile Hub Clinics\n4.8(237)\n"
+             "Dentist \u00b7  \u00b7 599 Main Blvd\n"
+             "Closes soon \u00b7 2 PM \u00b7 Reopens 6 PM \u00b7 +92 303 5995990",
+             "Dentist", "599 Main Blvd"),
+            ("Rahman and Rahman Dental Surgeons Packages Mall",
+             "Rahman and Rahman Dental Surgeons Packages Mall\n"
+             "Rahman and Rahman Dental Surgeons Packages Mall\n4.8(178)\n"
+             "Dental clinic \u00b7 Shop #G-010, Packages Mall",
+             "Dental clinic", "Shop #G-010, Packages Mall"),
+            # A name containing a middle dot looks exactly like the
+            # category/address line. Without the explicit name check this
+            # returns "Smile" as the category and "Dental Lahore" as the
+            # address - mutation testing found that the other two cases above
+            # passed on the dot check alone, so this case is what actually
+            # holds the name comparison in place.
+            ("Smile \u00b7 Dental \u00b7 Lahore",
+             "Smile \u00b7 Dental \u00b7 Lahore\nSmile \u00b7 Dental \u00b7 Lahore\n4.7(50)\n"
+             "Dental clinic \u00b7 12 Mall Rd\nOpen \u00b7 Closes 7 PM",
+             "Dental clinic", "12 Mall Rd"),
+        ]:
+            with self.subTest(name=name[:20]):
+                got_cat, got_addr = _category_and_address(text, name)
+                self.assertEqual(got_cat, cat)
+                self.assertEqual(got_addr, addr)
+                self.assertNotEqual(got_cat.lower(), name.lower(),
+                                    "the category must never be the name")
+
+    def test_the_hours_line_is_not_mistaken_for_the_category(self):
+        """"Open / Closes 6 PM" sits on its own dotted line, like the category."""
+        from agent1.scraper import _category_and_address
+
+        cat, _ = _category_and_address(
+            "X Clinic\nX Clinic\n4.1(9)\nOpen \u00b7 Closes 6 PM \u00b7 +92 300 1234567",
+            "X Clinic")
+        self.assertNotIn("clos", cat.lower())
+        self.assertNotIn("open", cat.lower())
+
+    def test_an_address_is_never_recorded_as_a_phone_number(self):
+        """The card mixes phones with street numbers, ratings and hours.
+
+        A lead carrying "Flat # 3, 1st Floor" in its phone field is worse than
+        one with no phone: Agent 3 would try to dial it. No phone is the
+        correct answer when Google did not show one.
+        """
+        from agent1.scraper import _phone_from_card
+
+        for text in [
+            "FAMILY DENTAL CLINIC\n4.8(25)\n"
+            "Dental clinic \u00b7  \u00b7 Flat # 3, 1st Floor, Lahore \u2013 Kasur Rd\n"
+            "Open \u00b7 Closes 9 PM",
+            "Rating Only\n4.9(253)\nDental clinic \u00b7 Y Block, 267-Y Street 11",
+            "No Phone Co\n3.9(4)\nClinic \u00b7  \u00b7 Plot 45-A, Block 12, Sector F-8\n"
+            "Closed \u00b7 Opens 9 AM",
+        ]:
+            with self.subTest(text=text[:28]):
+                self.assertEqual(_phone_from_card(text), "",
+                                 "no phone shown means no phone stored")
+
+    def test_phones_are_found_outside_pakistan(self):
+        """Worldwide hunting means worldwide phone formats.
+
+        A +92-only pattern would silently return no phone for every US, UK or
+        Gulf lead, and the hunt would look like it was finding weak prospects
+        rather than failing to parse them.
+        """
+        from agent1.scraper import _phone_from_card
+
+        for text, want in [
+            ("C\n4.2(1,204)\nClinic \u00b7 1234 Union Ave\nOpen \u00b7 Closes 5 PM \u00b7 +1 901-555-0134",
+             "+1 901-555-0134"),
+            ("C\n4.0(12)\nClinic \u00b7 5600 Poplar Ave Suite 200\nOpen \u00b7 (901) 555-0134",
+             "(901) 555-0134"),
+            ("C\n4.5(88)\nDentist \u00b7 10 Harley St\nOpen \u00b7 020 7946 0958",
+             "020 7946 0958"),
+            ("C\n4.6(31)\nClinic \u00b7 Jumeirah 1\nOpen \u00b7 +971 4 395 5591",
+             "+971 4 395 5591"),
+        ]:
+            with self.subTest(want=want):
+                self.assertEqual(_phone_from_card(text), want)
+
+    def test_a_looser_pattern_still_rejects_real_addresses(self):
+        """The guard against fixing the UAE bug by making the pattern vague.
+
+        Widening the international branch to accept a one-digit area code
+        (+971 4 ...) made it accept any 7-12 digit run after a "+". These are
+        real Maps addresses, digit-heavy on purpose; if any of them parses as
+        a phone number, Agent 3 dials a street address.
+        """
+        from agent1.scraper import _phone_from_card
+
+        for addr in [
+            "Flat # 3, 1st Floor, Lahore – Kasur Rd, beside qainchi Flyover",
+            "Y Block, 267-Y Street 11",
+            "Plot 45-A, Block 12, Sector F-8",
+            "5600 Poplar Ave Suite 200",
+            "House 12-B, Street 45, DHA Phase 5",
+            "Office 1204, 12th Floor, Tower A",
+            "Shop 7, Plaza 88, Main Blvd Gulberg III",
+        ]:
+            with self.subTest(addr=addr[:30]):
+                card = ("Some Clinic\nSome Clinic\n4.5(60)\n"
+                        f"Clinic · {addr}\nOpen")
+                self.assertEqual(
+                    _phone_from_card(card), "",
+                    "an address must never be stored as a phone number")
+
+    def test_a_bare_digit_run_is_not_treated_as_a_phone(self):
+        """No "+", no bracketed area code, no trunk "0" means no phone.
+
+        A loose "any long digit run" pattern is the obvious way to widen
+        coverage and the wrong one: the card text is full of digit runs
+        that are addresses. A number with no dialing prefix could not be
+        called from Pakistan anyway, so rejecting it loses nothing.
+        """
+        from agent1.scraper import _phone_from_card
+
+        for tail in ["322 3368251", "3223368251", "555 0134", "1204 5600"]:
+            with self.subTest(tail=tail):
+                card = ("X Clinic\nX Clinic\n4.0(5)\n"
+                        f"Clinic \u00b7 Main Rd\nOpen \u00b7 {tail}")
+                self.assertEqual(
+                    _phone_from_card(card), "",
+                    "a digit run with no dialing prefix is not a phone number")
+
+    def test_googles_own_links_are_not_recorded_as_the_website(self):
+        """A card contains Google links too (the place link, Directions).
+
+        Recording one as the lead's website would point the site auditor at
+        google.com and produce an audit of Google for every prospect.
         """
         src = self._source()
-        self.assertIn("tab.close()", src, "each detail tab must be closed")
+        self.assertRegex(
+            src, r"a\[href\^='http'\]:not\(\[href\*='google\.'\]\)",
+            "the website selector must exclude Google's own links")
+
+    def test_heavy_resources_are_still_blocked(self):
+        """Images, media and fonts are pure bytes we never read."""
+        src = self._source()
+        self.assertRegex(src, r'(?m)^\s*await context\.route\(',
+                         "resource blocking must be installed, not commented out")
 
 
 if __name__ == "__main__":

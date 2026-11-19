@@ -5,8 +5,10 @@ user-agent, gradual scrolling, and graceful per-result failure handling. If
 Google blocks/rate-limits or shows a consent/CAPTCHA wall, we detect it, stop
 cleanly, and report it (the caller sets Agent 1 to "error").
 
-Strategy: collect place links from the results feed, then open each place to
-read the publicly-shown phone/website/address from its detail panel.
+Strategy: read the results feed once. Each result card already carries the
+name, rating, review count, category, address, phone and website, so no
+per-business detail page is opened - that stage cost ~25s per business and
+showed a phone for only 3 of 5 places the cards all had phones for.
 """
 
 from __future__ import annotations
@@ -24,25 +26,6 @@ _UA = (
     "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
 )
 
-
-# How many business detail pages to read at once. Each is an independent URL,
-# so waiting for them one at a time was pure latency: the server sat idle
-# between round trips to Google.
-#
-# Measured on the VPS against Lahore, 5 results, three runs each:
-#   css blocked, 4 tabs ... [60, 47, 42]  avg 50s
-#   css allowed, 4 tabs ... [40, 43, 44]  avg 42s   <- kept
-#   css allowed, 2 tabs ... [42, 61, 41]  avg 48s
-#
-# Four tabs beat two, so the earlier guess that a small VPS would contend on
-# renderer processes was wrong — the time is spent waiting on Google, not on
-# CPU, and more overlap helps.
-#
-# Read the spread, not just the average: one run of the last config took 61s
-# while two took ~41s. Google's own variance is ±20s, wider than the gap
-# between these settings, so treat 42 vs 48 as "no worse" rather than proof.
-# Anything tuned here needs three runs minimum, or it is noise.
-_DETAIL_CONCURRENCY = 4
 
 # Resource types refused in the Maps tab. Images, media and fonts are pure
 # bytes we never read — blocking them is what let a Memphis search finish at
@@ -151,7 +134,25 @@ async def scrape_google_maps(query: str, max_results: int = 20) -> dict:
                     return {"ok": False, "blocked": True, "message": "Scraping paused — redirected away from Maps (possible block).", "leads": []}
                 return {"ok": True, "blocked": False, "message": "No results feed found (0 businesses).", "leads": []}
 
-            # Collect place links + names (scroll gradually to load more).
+            # Collect the result cards. Each card is a direct child div of the
+            # feed that contains a place link, and it carries EVERYTHING this
+            # scraper needs already rendered: name, rating, review count,
+            # category, address, phone and website.
+            #
+            # This replaced opening one detail page per business. Measured on
+            # the VPS, 2026-11-19, Lahore, 5 results:
+            #   search page + feed ready ......... 11s
+            #   5 detail pages, 4 at a time ...... 30s  (24-28s EACH, in parallel)
+            # Parallelism was already maxed out: every tab took the same ~25s,
+            # so adding tabs could not help, which is why 2 tabs and 4 tabs
+            # measured identically (56s vs 57s). The detail pages were not slow
+            # because they queued; each one is just slow.
+            #
+            # They were also incomplete: only 3 of 5 detail panels exposed a
+            # phone button, while all 8 cards in the feed showed a phone.
+            #
+            # One page load instead of one-per-business is what makes distant
+            # hunting work. Distance is paid once, not N times.
             place_sel = "a[href*='/maps/place/']"
             seen = 0
             for step in range(10):
@@ -164,62 +165,31 @@ async def scrape_google_maps(query: str, max_results: int = 20) -> dict:
                 await feed.evaluate("el => el.scrollBy(0, el.scrollHeight)")
                 await _pause(0.7, 1.5)
 
-            anchors = feed.locator(place_sel)
-            n = min(await anchors.count(), max_results)
-            targets = []
-            for i in range(n):
-                a = anchors.nth(i)
-                name = ((await a.get_attribute("aria-label")) or "").strip()
-                href = (await a.get_attribute("href")) or ""
-                # Category/address are visible on the list card already.
-                card_text = ""
+            cards = feed.locator("> div")
+            total = await cards.count()
+            for i in range(total):
+                if len(leads) >= max_results:
+                    break
+                card = cards.nth(i)
                 try:
-                    card_text = await a.locator("xpath=../..").inner_text()
-                except Exception:  # noqa: BLE001
-                    pass
-                if name and href:
-                    targets.append((name, href, card_text))
-
-            # Visit each place to read phone + website from the detail panel.
-            #
-            # These were done strictly one after another on a single tab, so
-            # 20 businesses meant 20 sequential page loads plus 20 pauses —
-            # the bulk of the 39s a Lahore search took, and the reason a
-            # Memphis search never finished. They are independent reads of
-            # independent URLs, so they run in parallel now, a few tabs at a
-            # time.
-            #
-            # _DETAIL_CONCURRENCY is deliberately modest: the point is to stop
-            # waiting on round trips, not to hammer Google. Four tabs is a
-            # browser with four tabs open, which is what a person has.
-            sem = asyncio.Semaphore(_DETAIL_CONCURRENCY)
-
-            async def _detail(name: str, href: str, card_text: str):
-                async with sem:
-                    tab = None
-                    try:
-                        tab = await context.new_page()
-                        await tab.goto(href, wait_until="domcontentloaded", timeout=30000)
-                        await _pause(0.3, 0.8)
-                        phone = await _extract_phone(tab)
-                        website = await _extract_website(tab)
-                        return _build_lead(name, card_text, phone, website)
-                    except Exception as exc:  # noqa: BLE001 - one bad place is survivable
-                        log.warning("Skipping place '%s': %s", name[:40], exc)
-                        return None
-                    finally:
-                        # A leaked tab is a leaked renderer process. With dozens
-                        # of rounds a hunt would walk the server's memory up.
-                        if tab is not None:
-                            try:
-                                await tab.close()
-                            except Exception:  # noqa: BLE001
-                                pass
-
-            results = await asyncio.gather(
-                *(_detail(n, h, c) for n, h, c in targets),
-                return_exceptions=True)
-            leads.extend(r for r in results if isinstance(r, dict))
+                    link = card.locator(place_sel)
+                    if not await link.count():
+                        continue        # spacers and the "end of list" footer
+                    name = ((await link.first.get_attribute("aria-label")) or "").strip()
+                    if not name:
+                        continue
+                    card_text = await card.inner_text()
+                    # The business website is an ordinary outbound link on the
+                    # card. Exclude Google's own links (Directions, the place
+                    # link itself) or we would record maps.google.com as the
+                    # lead's website and audit Google instead of the prospect.
+                    website = ""
+                    out = card.locator("a[href^='http']:not([href*='google.'])")
+                    if await out.count():
+                        website = (await out.first.get_attribute("href")) or ""
+                    leads.append(_build_lead(name, card_text, _phone_from_card(card_text), website))
+                except Exception as exc:  # noqa: BLE001 - one bad card is survivable
+                    log.warning("Skipping card %d: %s", i, exc)
 
         return {"ok": True, "blocked": False, "message": f"Scraped {len(leads)} businesses.", "leads": leads}
     except Exception as exc:  # noqa: BLE001
@@ -236,27 +206,52 @@ async def scrape_google_maps(query: str, max_results: int = 20) -> dict:
                 pass
 
 
-async def _extract_phone(page) -> str:
-    try:
-        btn = page.locator("button[data-item-id^='phone']")
-        if await btn.count():
-            label = (await btn.first.get_attribute("aria-label")) or ""
-            m = re.search(r"(\+?[\d][\d\s().-]{6,}\d)", label)
-            if m:
-                return m.group(1).strip()
-    except Exception:  # noqa: BLE001
-        pass
-    return ""
+# Phone numbers as Google prints them on a result card, e.g.
+# "+92 322 3368251", "+1 901-555-0134", "(901) 555-0134", "020 7946 0958".
+#
+# Strict about the start, because the card text is a jumble of digits: street
+# numbers ("152 G1 Canal Rd"), ratings and review counts ("4.9(78)"), and
+# opening hours ("Closes 6 PM") all share the line with the phone. A lead
+# carrying an address fragment in its phone field is worse than one with no
+# phone at all, because Agent 3 would try to dial it.
+#
+# A real card line looks like:
+#   "Open · Closes 6 PM · +92 322 3368251"
+# so filtering out whole segments that mention hours would have thrown away
+# every phone number. The pattern carries the precision instead: a leading
+# "+", a bracketed area code, or a trunk "0" is what separates a phone from
+# the surrounding noise.
+# The separator class includes U+2011 (non-breaking hyphen) on suspicion,
+# not evidence: the captured Lahore cards used ordinary spaces and hyphens
+# only. It costs nothing to accept and Maps does use typographic characters
+# elsewhere in the feed, but do not read it as a measured requirement.
+#
+# An international number is "+", a country code, then 7-12 digits split
+# into groups however that country writes them. Area codes range from ONE
+# digit (+971 4 395 5591, Dubai) to four, so a fixed group size silently
+# dropped whole countries - the UAE test below exists because {2,4} did.
+_CARD_PHONE_RE = re.compile(
+    r"""(?:
+          \+\d{1,3}(?:[\s.‑-]?\d){7,12}
+        | \(\d{3}\)[\s.‑-]?\d{3}[\s.‑-]?\d{4}
+        | (?<![\d.])0\d{2,4}[\s.‑-]\d{3,4}[\s.‑-]?\d{3,4}
+    )""",
+    re.VERBOSE,
+)
 
 
-async def _extract_website(page) -> str:
-    try:
-        a = page.locator("a[data-item-id='authority']")
-        if await a.count():
-            return (await a.first.get_attribute("href")) or ""
-    except Exception:  # noqa: BLE001
-        pass
-    return ""
+def _phone_from_card(card_text: str) -> str:
+    """Pull the phone out of a result card's visible text.
+
+    Measured on the VPS 2026-11-19: all 8 cards in a Lahore search showed a
+    phone here, while only 3 of 5 detail panels exposed a phone button. The
+    card is both faster and more complete.
+    """
+    m = _CARD_PHONE_RE.search(card_text or "")
+    if not m:
+        return ""
+    # Collapse whitespace runs; keep the separators Google chose.
+    return re.sub(r"\s+", " ", m.group(0)).strip()
 
 
 # Maps prints the score and review count together on the result card, e.g.
@@ -278,19 +273,62 @@ def _parse_rating(card_text: str) -> tuple[float | None, int | None]:
     return rating, reviews
 
 
+# The category/address line of a result card, e.g.
+#   "Dental clinic ·  · 152 G1 Canal Rd"
+#   "Dental clinic · Shop #G-010, Packages Mall"
+# The category is the first dot-separated field; the address is the rest. The
+# middle field is often empty (a badge Maps left blank), so empty parts are
+# dropped rather than counted as the address.
+_CATEGORY_WORDS = ("clinic", "dentist", "doctor", "hospital", "centre", "center",
+                   "shop", "store", "salon", "studio", "agency", "restaurant",
+                   "cafe", "service", "contractor", "repair", "school", "gym")
+
+_HOURS_PREFIX = ("open", "clos", "reopen", "temporarily", "permanently", "·")
+
+
+def _category_and_address(card_text: str, name: str) -> tuple[str, str]:
+    """Split the card's category line into (category, address).
+
+    The previous version took "the first short line with letters", skipping
+    only line 1 - but a card repeats the business name on lines 1 AND 2, so it
+    returned the business name as the category for every lead. The address was
+    never read at all: every lead was stored with address "".
+    """
+    lines = [l.strip() for l in (card_text or "").split("\n") if l.strip()]
+    nm = (name or "").strip().lower()
+    for line in lines[:6]:
+        if line.lower() == nm or _RATING_RE.search(line):
+            continue                      # the repeated name, and "4.9(78)"
+        if "·" not in line:
+            continue
+        parts = [x.strip() for x in line.split("·")]
+        parts = [x for x in parts if x]
+        if not parts:
+            continue
+        head = parts[0]
+        # Skip the hours line ("Open · Closes 6 PM · +92 322 3368251").
+        if head.lower().startswith(_HOURS_PREFIX):
+            continue
+        category = head if len(head) < 60 else ""
+        address = " ".join(parts[1:])[:200]
+        return category, address
+    # No dotted line: fall back to a short line that reads like a category.
+    for line in lines[:6]:
+        low = line.lower()
+        if low != nm and len(line) < 40 and any(w in low for w in _CATEGORY_WORDS):
+            return line, ""
+    return "", ""
+
+
 def _build_lead(name: str, card_text: str, phone: str, website: str) -> dict:
-    category = ""
-    for line in [l.strip() for l in card_text.split("\n") if l.strip()][1:5]:
-        if any(ch.isalpha() for ch in line) and len(line) < 40 and not any(c.isdigit() for c in line[:3]):
-            category = line
-            break
+    category, address = _category_and_address(card_text, name)
     rating, reviews = _parse_rating(card_text)
     return {
         "business_name": name,
         "category": category,
         "phone": phone,
         "website": website,
-        "address": "",
+        "address": address,
         "appears_no_website": not bool(website),
         "rating": rating,
         "reviews_count": reviews,
