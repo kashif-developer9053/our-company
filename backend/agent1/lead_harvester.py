@@ -544,232 +544,252 @@ async def harvest_leads(
 
     # A sweep asks about the PLACE; a niche hunt asks about the trade.
     templates = _area_queries(country) if sweep else _QUERY_TEMPLATES
-    for template in templates:
-        if len(qualified) >= target:
-            break
-        if time.perf_counter() - started > time_budget:
-            say(f"Time budget reached after {rounds_run} search rounds.")
-            break
-
-        rounds_run += 1
-        query = template.format(niche=niche, where=where)
-        say(f"Round {rounds_run}: searching '{query}' ({len(qualified)}/{target} qualified so far)")
-
-        fresh: list[dict] = []
-        # Did any source actually ANSWER this round, or did they all time out?
-        # "Answered with nothing" and "never answered" look identical in the
-        # result list and mean opposite things, so they are counted apart.
-        any_source_answered = False
-        # 1) Google Maps (good for phone numbers + addresses)
-        try:
-            maps = await asyncio.wait_for(
-                scrape_google_maps(query, max_results=_PER_ROUND),
-                timeout=_src_timeout)
-            any_source_answered = True
-            if maps.get("ok"):
-                got = maps.get("leads", [])
-                fresh.extend(got)
-                new_here = sum(1 for l in got if _lead_key(l)
-                               and _lead_key(l) not in exclude
-                               and _lead_key(l) not in pool)
-                say(f"Round {rounds_run}: Maps returned {len(got)} "
-                    f"({new_here} new)")
-            elif maps.get("blocked"):
-                say(f"Round {rounds_run}: Google is rate-limiting us — pausing this source.")
-        except asyncio.TimeoutError:
-            say(f"Round {rounds_run}: Maps took too long — moving on.")
-        except Exception as exc:  # noqa: BLE001 - one source failing is survivable
-            log.error("Maps round failed (isolated): %s", exc)
-        # 2) Our own web crawler (good for published emails).
-        #
-        #    A sweep skips it. Maps answers a location query with ~12 results
-        #    that carry a category and a review count; the crawler answers the
-        #    same query from search results, with neither. On a sweep that
-        #    matters: the size filter and the chain filter both need those
-        #    numbers, and without them a sweep of Sialkot came back with eight
-        #    businesses of unknown size, no trade, and mostly the weakest
-        #    pitch we have. There are 30 area queries to work through instead,
-        #    each returning real Maps data.
-        # Maps found nothing we had not already seen. The crawler and the
-        # social search ask the same question of the same small town, and
-        # cost minutes to return the same nothing — so skip them and try the
-        # next phrasing instead. This is what turned a dead town into an
-        # hour of silence.
-        maps_was_barren = bool(fresh) and not any(
-            _lead_key(l) and _lead_key(l) not in exclude and _lead_key(l) not in pool
-            for l in fresh)
-
-        # Skip the crawler once Maps starts repeating itself — it asks the
-        # same question of the same town and costs minutes to return the same
-        # nothing. But never skip it on the FIRST round: Maps can repeat
-        # itself immediately in a small town, and bailing out that early meant
-        # the crawler never ran at all for the whole hunt.
-        if not sweep and not (maps_was_barren and rounds_run > 1
-                              and _SKIP_EXTRA_SOURCES_WHEN_BARREN):
-            try:
-                say(f"Round {rounds_run}: checking published websites…")
-                mined = await asyncio.wait_for(
-                    mine_business_websites(query, max_results=_PER_ROUND),
-                    timeout=_src_timeout)
-                any_source_answered = True
-                if mined.get("ok"):
-                    fresh.extend(mined.get("leads", []))
-            except asyncio.TimeoutError:
-                say(f"Round {rounds_run}: web crawl took too long — moving on.")
-            except Exception as exc:  # noqa: BLE001
-                log.error("Web mining round failed (isolated): %s", exc)
-        # 3) Businesses that exist only on Facebook/Instagram. Maps and the web
-        #    crawler both assume a website, so these were invisible — yet "no
-        #    website at all" is the strongest pitch we have. Run once per hunt
-        #    rather than per round: the queries do not vary by template and the
-        #    engines throttle quickly.
-        # A sweep has no trade to search social for, and "business in Sialkot"
-        # on Facebook returns pages, not businesses.
-        # The barren-Maps skip deliberately does NOT apply here. Maps
-        # repeating itself means MAPS is exhausted; it says nothing about
-        # Facebook, which is a different index answering a different
-        # question. Gating this on it meant that in exactly the towns where
-        # Maps runs dry, the one source that finds businesses with NO website
-        # — the strongest website pitch we have — never ran at all, for the
-        # whole hunt. That silently removed our best leads from every hunt in
-        # a small town.
-        if rounds_run == 1 and not sweep:
-            try:
-                say("Checking businesses that only have a Facebook page…")
-                social = await asyncio.wait_for(
-                    discover_social_businesses(niche, where, max_results=_PER_ROUND),
-                    timeout=_src_timeout)
-                any_source_answered = True
-                if social.get("ok") and social.get("leads"):
-                    fresh.extend(social["leads"])
-                    say(f"Social search added {len(social['leads'])} businesses with no website.")
-            except asyncio.TimeoutError:
-                say("Social search took too long — moving on.")
-            except Exception as exc:  # noqa: BLE001
-                log.error("Social mining failed (isolated): %s", exc)
-
-        # Drop anything already collected in a previous run or round.
-        # Count the round as a timeout round only if NOTHING answered.
-        timeout_rounds = 0 if any_source_answered else timeout_rounds + 1
-
-        raw_count = len(fresh)
-        fresh = [l for l in fresh if _lead_key(l) and _lead_key(l) not in exclude and _lead_key(l) not in pool]
-        if not fresh:
-            barren_rounds += 1
-            say(f"Round {rounds_run}: all {raw_count} results were already known — nothing new.")
-            # If several rounds in a row surface nothing new, this niche/area is
-            # genuinely exhausted; stop rather than burning the whole budget.
-            # Be far more stubborn while the haul is still thin. Quitting after
-            # a few empty rounds is reasonable once there is a decent pile, but
-            # when almost nothing has been found the remaining templates are
-            # exactly what might work, so push on through the empty ones.
-            limit = _BARREN_LIMIT if len(qualified) >= _PERSIST_UNTIL else _BARREN_LIMIT_THIN
-            # A round where every source TIMED OUT is not evidence about the
-            # market — it is evidence about our connection to it. Reporting
-            # "this niche/area looks exhausted" after six such rounds told the
-            # CEO there were no clinics in Memphis, which is false and is an
-            # expensive thing to believe. Stop sooner, and say the true reason.
-            if timeout_rounds >= _TIMEOUT_ROUNDS_LIMIT:
-                say(f"Every search source timed out on {timeout_rounds} rounds in a row — "
-                    f"this is a speed problem on our side, NOT an empty market. "
-                    f"Nothing was actually searched. Try again, or try a city "
-                    f"closer to home if it keeps happening.")
-                break
-            if barren_rounds >= limit:
-                say(f"{barren_rounds} rounds with no new businesses and "
-                    f"{len(qualified)} qualified so far — this niche/area looks exhausted. "
-                    f"Try widening the location or a different niche.")
-                break
-            continue
-        barren_rounds = 0
-        _merge(pool, fresh)
-
-        # 3) Find REAL published emails for the new candidates.
-        try:
-            say(f"Round {rounds_run}: looking up contact details for "
-                f"{len(fresh)} businesses…")
-            await asyncio.wait_for(enrich_lead_emails(fresh, concurrency=8),
-                                   timeout=_src_timeout)
-        except asyncio.TimeoutError:
-            say(f"Round {rounds_run}: contact lookup took too long — "
-                f"keeping what it found.")
-        except Exception as exc:  # noqa: BLE001
-            log.error("Enrichment failed (isolated): %s", exc)
-
-        # 4) Audit their sites. For a website hunt this is the qualifying
-        #    test; for CRM/ERP/booking it only answers "does their site work",
-        #    which the purpose diagnosis needs — so it must not also claim the
-        #    collection reason.
-        try:
-            say(f"Round {rounds_run}: checking {len(fresh)} websites…")
-            await asyncio.wait_for(
-                audit_leads(fresh, concurrency=_AUDIT_CONCURRENCY,
-                            set_reason=is_website_service(service)),
-                timeout=_src_timeout)
-        except asyncio.TimeoutError:
-            say(f"Round {rounds_run}: website checks took too long — "
-                f"keeping what finished.")
-        except Exception as exc:  # noqa: BLE001
-            log.error("Audit failed (isolated): %s", exc)
-
-        # 5) Apply BOTH gates.
-        #
-        # First mark branches of multi-location groups. A Seattle clinic hunt
-        # returned ten of twenty results as branches (uwmedicine.org,
-        # neighborcare.org, pacificmedicalcenters.org, sihb.org and
-        # seattleroots.org, two each) and every one of them passed every gate,
-        # which is why that hunt ran 13 rounds for zero leads.
-        chain_flagged = _mark_chain_branches(pool, fresh)
-        if chain_flagged:
-            log.info("Round %d: %d chain branches flagged", rounds_run, chain_flagged)
-
-        for lead in fresh:
-            key = _lead_key(lead)
-            if key in qualified:
-                continue
-            if lead.get("chain_branch"):
-                rejected["chain_branch"] += 1
-                continue
-            contact_ok, contact_desc = has_real_contact(lead)
-            if not contact_ok:
-                rejected["no_contact"] += 1
-                if (lead.get("email_confidence") or "") == "guessed":
-                    rejected["guessed_email_only"] += 1
-                continue
-            # Only the kind of contact this campaign can actually use.
-            type_ok, _why = wanted_contact(lead, contact)
-            if not type_ok:
-                rejected["wrong_contact_type"] += 1
-                continue
-            # For website work the audit decides. For CRM/ERP/booking the
-            # audit is the wrong test — a business with a perfect site may
-            # still be running stock on paper — so size decides instead.
-            # A sweep asks neither: it keeps whatever we can sell something to.
-            fits, why_not = _qualifies(service, lead, sweep)
-            if not fits:
-                rejected["good_site"] += 1
-                continue
-            lead["contact_verified"] = contact_desc
-            _stamp_purpose(lead, service)
-            lead["niche"] = lead.get("niche") or niche or _swept_niche(lead, query)
-            lead["city"] = lead.get("city") or city
-            lead["country"] = lead.get("country") or country
-            qualified[key] = lead
+    # Pressing stop must not destroy the work. task.cancel() raises
+    # CancelledError at whatever await is running, and nothing here used to
+    # catch it, so `qualified` died with the task: a Calgary hunt stopped at
+    # "27/50 qualified" stored zero leads, and the CEO was told the hunt had
+    # found nothing. Twenty-five minutes of searching, discarded by the stop
+    # button.
+    #
+    # Cancellation is turned into a normal return instead. The flag is read
+    # below to mark the result, so the caller can say "stopped early" rather
+    # than claiming the hunt completed.
+    was_cancelled = False
+    try:
+        for template in templates:
             if len(qualified) >= target:
                 break
+            if time.perf_counter() - started > time_budget:
+                say(f"Time budget reached after {rounds_run} search rounds.")
+                break
 
-        parts = [f"{rejected['no_contact']} no contact",
-                 f"{rejected['good_site']} site already fine"]
-        if rejected["chain_branch"]:
-            parts.append(f"{rejected['chain_branch']} chain branches")
-        say(f"Round {rounds_run} done — {len(qualified)}/{target} qualified "
-            f"({', '.join(parts)})")
+            rounds_run += 1
+            query = template.format(niche=niche, where=where)
+            say(f"Round {rounds_run}: searching '{query}' ({len(qualified)}/{target} qualified so far)")
+
+            fresh: list[dict] = []
+            # Did any source actually ANSWER this round, or did they all time out?
+            # "Answered with nothing" and "never answered" look identical in the
+            # result list and mean opposite things, so they are counted apart.
+            any_source_answered = False
+            # 1) Google Maps (good for phone numbers + addresses)
+            try:
+                maps = await asyncio.wait_for(
+                    scrape_google_maps(query, max_results=_PER_ROUND),
+                    timeout=_src_timeout)
+                any_source_answered = True
+                if maps.get("ok"):
+                    got = maps.get("leads", [])
+                    fresh.extend(got)
+                    new_here = sum(1 for l in got if _lead_key(l)
+                                   and _lead_key(l) not in exclude
+                                   and _lead_key(l) not in pool)
+                    say(f"Round {rounds_run}: Maps returned {len(got)} "
+                        f"({new_here} new)")
+                elif maps.get("blocked"):
+                    say(f"Round {rounds_run}: Google is rate-limiting us — pausing this source.")
+            except asyncio.TimeoutError:
+                say(f"Round {rounds_run}: Maps took too long — moving on.")
+            except Exception as exc:  # noqa: BLE001 - one source failing is survivable
+                log.error("Maps round failed (isolated): %s", exc)
+            # 2) Our own web crawler (good for published emails).
+            #
+            #    A sweep skips it. Maps answers a location query with ~12 results
+            #    that carry a category and a review count; the crawler answers the
+            #    same query from search results, with neither. On a sweep that
+            #    matters: the size filter and the chain filter both need those
+            #    numbers, and without them a sweep of Sialkot came back with eight
+            #    businesses of unknown size, no trade, and mostly the weakest
+            #    pitch we have. There are 30 area queries to work through instead,
+            #    each returning real Maps data.
+            # Maps found nothing we had not already seen. The crawler and the
+            # social search ask the same question of the same small town, and
+            # cost minutes to return the same nothing — so skip them and try the
+            # next phrasing instead. This is what turned a dead town into an
+            # hour of silence.
+            maps_was_barren = bool(fresh) and not any(
+                _lead_key(l) and _lead_key(l) not in exclude and _lead_key(l) not in pool
+                for l in fresh)
+
+            # Skip the crawler once Maps starts repeating itself — it asks the
+            # same question of the same town and costs minutes to return the same
+            # nothing. But never skip it on the FIRST round: Maps can repeat
+            # itself immediately in a small town, and bailing out that early meant
+            # the crawler never ran at all for the whole hunt.
+            if not sweep and not (maps_was_barren and rounds_run > 1
+                                  and _SKIP_EXTRA_SOURCES_WHEN_BARREN):
+                try:
+                    say(f"Round {rounds_run}: checking published websites…")
+                    mined = await asyncio.wait_for(
+                        mine_business_websites(query, max_results=_PER_ROUND),
+                        timeout=_src_timeout)
+                    any_source_answered = True
+                    if mined.get("ok"):
+                        fresh.extend(mined.get("leads", []))
+                except asyncio.TimeoutError:
+                    say(f"Round {rounds_run}: web crawl took too long — moving on.")
+                except Exception as exc:  # noqa: BLE001
+                    log.error("Web mining round failed (isolated): %s", exc)
+            # 3) Businesses that exist only on Facebook/Instagram. Maps and the web
+            #    crawler both assume a website, so these were invisible — yet "no
+            #    website at all" is the strongest pitch we have. Run once per hunt
+            #    rather than per round: the queries do not vary by template and the
+            #    engines throttle quickly.
+            # A sweep has no trade to search social for, and "business in Sialkot"
+            # on Facebook returns pages, not businesses.
+            # The barren-Maps skip deliberately does NOT apply here. Maps
+            # repeating itself means MAPS is exhausted; it says nothing about
+            # Facebook, which is a different index answering a different
+            # question. Gating this on it meant that in exactly the towns where
+            # Maps runs dry, the one source that finds businesses with NO website
+            # — the strongest website pitch we have — never ran at all, for the
+            # whole hunt. That silently removed our best leads from every hunt in
+            # a small town.
+            if rounds_run == 1 and not sweep:
+                try:
+                    say("Checking businesses that only have a Facebook page…")
+                    social = await asyncio.wait_for(
+                        discover_social_businesses(niche, where, max_results=_PER_ROUND),
+                        timeout=_src_timeout)
+                    any_source_answered = True
+                    if social.get("ok") and social.get("leads"):
+                        fresh.extend(social["leads"])
+                        say(f"Social search added {len(social['leads'])} businesses with no website.")
+                except asyncio.TimeoutError:
+                    say("Social search took too long — moving on.")
+                except Exception as exc:  # noqa: BLE001
+                    log.error("Social mining failed (isolated): %s", exc)
+
+            # Drop anything already collected in a previous run or round.
+            # Count the round as a timeout round only if NOTHING answered.
+            timeout_rounds = 0 if any_source_answered else timeout_rounds + 1
+
+            raw_count = len(fresh)
+            fresh = [l for l in fresh if _lead_key(l) and _lead_key(l) not in exclude and _lead_key(l) not in pool]
+            if not fresh:
+                barren_rounds += 1
+                say(f"Round {rounds_run}: all {raw_count} results were already known — nothing new.")
+                # If several rounds in a row surface nothing new, this niche/area is
+                # genuinely exhausted; stop rather than burning the whole budget.
+                # Be far more stubborn while the haul is still thin. Quitting after
+                # a few empty rounds is reasonable once there is a decent pile, but
+                # when almost nothing has been found the remaining templates are
+                # exactly what might work, so push on through the empty ones.
+                limit = _BARREN_LIMIT if len(qualified) >= _PERSIST_UNTIL else _BARREN_LIMIT_THIN
+                # A round where every source TIMED OUT is not evidence about the
+                # market — it is evidence about our connection to it. Reporting
+                # "this niche/area looks exhausted" after six such rounds told the
+                # CEO there were no clinics in Memphis, which is false and is an
+                # expensive thing to believe. Stop sooner, and say the true reason.
+                if timeout_rounds >= _TIMEOUT_ROUNDS_LIMIT:
+                    say(f"Every search source timed out on {timeout_rounds} rounds in a row — "
+                        f"this is a speed problem on our side, NOT an empty market. "
+                        f"Nothing was actually searched. Try again, or try a city "
+                        f"closer to home if it keeps happening.")
+                    break
+                if barren_rounds >= limit:
+                    say(f"{barren_rounds} rounds with no new businesses and "
+                        f"{len(qualified)} qualified so far — this niche/area looks exhausted. "
+                        f"Try widening the location or a different niche.")
+                    break
+                continue
+            barren_rounds = 0
+            _merge(pool, fresh)
+
+            # 3) Find REAL published emails for the new candidates.
+            try:
+                say(f"Round {rounds_run}: looking up contact details for "
+                    f"{len(fresh)} businesses…")
+                await asyncio.wait_for(enrich_lead_emails(fresh, concurrency=8),
+                                       timeout=_src_timeout)
+            except asyncio.TimeoutError:
+                say(f"Round {rounds_run}: contact lookup took too long — "
+                    f"keeping what it found.")
+            except Exception as exc:  # noqa: BLE001
+                log.error("Enrichment failed (isolated): %s", exc)
+
+            # 4) Audit their sites. For a website hunt this is the qualifying
+            #    test; for CRM/ERP/booking it only answers "does their site work",
+            #    which the purpose diagnosis needs — so it must not also claim the
+            #    collection reason.
+            try:
+                say(f"Round {rounds_run}: checking {len(fresh)} websites…")
+                await asyncio.wait_for(
+                    audit_leads(fresh, concurrency=_AUDIT_CONCURRENCY,
+                                set_reason=is_website_service(service)),
+                    timeout=_src_timeout)
+            except asyncio.TimeoutError:
+                say(f"Round {rounds_run}: website checks took too long — "
+                    f"keeping what finished.")
+            except Exception as exc:  # noqa: BLE001
+                log.error("Audit failed (isolated): %s", exc)
+
+            # 5) Apply BOTH gates.
+            #
+            # First mark branches of multi-location groups. A Seattle clinic hunt
+            # returned ten of twenty results as branches (uwmedicine.org,
+            # neighborcare.org, pacificmedicalcenters.org, sihb.org and
+            # seattleroots.org, two each) and every one of them passed every gate,
+            # which is why that hunt ran 13 rounds for zero leads.
+            chain_flagged = _mark_chain_branches(pool, fresh)
+            if chain_flagged:
+                log.info("Round %d: %d chain branches flagged", rounds_run, chain_flagged)
+
+            for lead in fresh:
+                key = _lead_key(lead)
+                if key in qualified:
+                    continue
+                if lead.get("chain_branch"):
+                    rejected["chain_branch"] += 1
+                    continue
+                contact_ok, contact_desc = has_real_contact(lead)
+                if not contact_ok:
+                    rejected["no_contact"] += 1
+                    if (lead.get("email_confidence") or "") == "guessed":
+                        rejected["guessed_email_only"] += 1
+                    continue
+                # Only the kind of contact this campaign can actually use.
+                type_ok, _why = wanted_contact(lead, contact)
+                if not type_ok:
+                    rejected["wrong_contact_type"] += 1
+                    continue
+                # For website work the audit decides. For CRM/ERP/booking the
+                # audit is the wrong test — a business with a perfect site may
+                # still be running stock on paper — so size decides instead.
+                # A sweep asks neither: it keeps whatever we can sell something to.
+                fits, why_not = _qualifies(service, lead, sweep)
+                if not fits:
+                    rejected["good_site"] += 1
+                    continue
+                lead["contact_verified"] = contact_desc
+                _stamp_purpose(lead, service)
+                lead["niche"] = lead.get("niche") or niche or _swept_niche(lead, query)
+                lead["city"] = lead.get("city") or city
+                lead["country"] = lead.get("country") or country
+                qualified[key] = lead
+                if len(qualified) >= target:
+                    break
+
+            parts = [f"{rejected['no_contact']} no contact",
+                     f"{rejected['good_site']} site already fine"]
+            if rejected["chain_branch"]:
+                parts.append(f"{rejected['chain_branch']} chain branches")
+            say(f"Round {rounds_run} done — {len(qualified)}/{target} qualified "
+                f"({', '.join(parts)})")
+
+    except asyncio.CancelledError:
+        # The CEO pressed stop. Everything already in `qualified` is real work
+        # that passed every gate; it is returned normally so the route layer
+        # can stage it for approval.
+        was_cancelled = True
+        log.info("Hunt cancelled by the CEO with %d qualified", len(qualified))
 
     # Still short after every template? The businesses are usually there, just
     # not ranking under this exact city wording. Retry with nearby-area phrasing
     # before giving up, rather than handing back a near-empty result and making
     # the CEO work out that "widen the location" was the missing step.
-    if (len(qualified) < min(target, _MIN_ACCEPTABLE)
+    if (not was_cancelled
+            and len(qualified) < min(target, _MIN_ACCEPTABLE)
             and city
             and time.perf_counter() - started < time_budget * 0.75):
         say(f"Only {len(qualified)} found in {where} — widening to the surrounding area.")
@@ -876,7 +896,17 @@ async def harvest_leads(
         "leads": leads,
         "found": len(leads),
         "target": target,
-        "complete": complete,
+        # A stopped hunt is never "complete", however many it found - saying
+        # otherwise would hide that more leads were available.
+        #
+        # Defensive, not load-bearing: in practice a hunt that reached its
+        # target has already left the loop, so a stopped one is short of
+        # target and `complete` is False anyway. Mutation testing could not
+        # produce a case where removing this changes the result. It is kept
+        # because the two conditions are independent and a future change to
+        # the completion test should not silently resurrect the claim.
+        "complete": complete and not was_cancelled,
+        "cancelled": was_cancelled,
         "rounds": rounds_run,
         "examined": len(pool),
         "rejected": rejected,

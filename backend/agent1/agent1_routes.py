@@ -620,14 +620,21 @@ async def _hunt_across_niches(body: "HarvestBody", target: int, where: str,
                 contact=body.contact,
             )
         except asyncio.CancelledError:
-            # The CEO pressed stop. Keep what has already been qualified —
-            # throwing away a half-finished hunt's leads would make stopping
-            # something you avoid doing, which defeats the button.
+            # Reaching here means the cancellation landed on an await OUTSIDE
+            # harvest_leads, which now handles its own stop and returns its
+            # qualified leads normally. This path therefore loses only the
+            # niche in flight, not the ones already walked.
             cancelled = True
             break
         except Exception as exc:  # noqa: BLE001 - one dead niche never ends a sweep
             log.error("Niche '%s' failed (isolated): %s", niche, exc)
             continue
+
+        # harvest_leads caught the stop itself and returned what it had.
+        # Without this the walk would carry on to the next niche, and the CEO
+        # would watch a hunt they stopped keep running.
+        if res.get("cancelled"):
+            cancelled = True
 
         rounds += res.get("rounds", 0)
         examined += res.get("examined", 0)
@@ -738,15 +745,20 @@ async def _run_hunt(run_id: str, body: "HarvestBody", target: int, already: int,
         result = await _hunt_across_niches(
             body, target, where, exclude, progress)
     except asyncio.CancelledError:
-        # Cancellation can land here rather than inside the niche walk,
-        # depending on which await was running when stop was pressed. The
-        # walk's own leads are unreachable from here, so this path records
-        # the stop honestly rather than reporting a crash.
+        # Both layers below now convert a stop into a normal return carrying
+        # their leads, so this is the narrow remaining case: the cancellation
+        # landed between them, on an await that holds no leads of its own.
+        #
+        # It used to be the common case, and it reported "added": 0 for every
+        # stopped hunt - which is how a Calgary hunt showing "27/50 qualified"
+        # stored nothing at all.
         _set_status("idle")
         runs[run_id] = {**runs.get(run_id, {}), "status": "stopped", "added": 0,
-                        "message": "Hunt stopped before any leads were staged.",
+                        "message": ("Hunt stopped. Any leads already staged "
+                                    "are safe; nothing was staged from this "
+                                    "run."),
                         "finished_at": _now_iso()}
-        log.info("Hunt %s cancelled by the CEO", run_id)
+        log.info("Hunt %s cancelled by the CEO (between stages)", run_id)
         return
     except Exception as exc:  # noqa: BLE001
         _set_status("error", f"Lead hunt failed: {exc}")
