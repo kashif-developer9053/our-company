@@ -59,12 +59,73 @@ class WebCrawlerTests(unittest.TestCase):
     def test_crawler_is_never_skipped_on_the_first_round(self):
         """Maps can repeat itself immediately; bailing then is too early."""
         guard = re.search(
-            r"if not sweep and not \(maps_was_barren[^)]*\)", HARVESTER)
+            r"if not sweep and not crawl_given_up and not \(\s*"
+            r"maps_was_barren[^)]*\)", HARVESTER, re.S)
         self.assertIsNotNone(guard, "web crawler guard not found")
         self.assertIn(
             "rounds_run > 1", guard.group(0),
             "The crawler must run at least once before the barren-Maps skip "
             "applies, or it never runs at all when round 1 is already barren.")
+
+    def test_the_crawler_gives_up_after_repeated_timeouts(self):
+        """A Seattle hunt spent 42 of 60 minutes on a crawler that never answered.
+
+        The crawl timed out at the full 140s ceiling on all 18 rounds and
+        contributed nothing, while Maps returned 23-40 businesses every round.
+        Asking a source that has already failed twice is pure waste.
+        """
+        from agent1.lead_harvester import _CRAWL_GIVE_UP_AFTER
+        self.assertGreaterEqual(
+            _CRAWL_GIVE_UP_AFTER, 2,
+            "one timeout can be a throttle clearing - do not quit on the first")
+        self.assertLessEqual(
+            _CRAWL_GIVE_UP_AFTER, 3,
+            "more than ~3 wasted rounds defeats the point")
+        self.assertIn("crawl_given_up = True", HARVESTER)
+
+    def test_a_crawl_that_answers_clears_the_strike_count(self):
+        """One slow round must not disable the crawler for the whole hunt.
+
+        Driven rather than grepped: an earlier version of this test asserted
+        that the text "crawl_timeouts = 0" appeared in the source, which it
+        does twice (the initialiser and the reset). Deleting the reset left
+        the assertion passing, so the test proved nothing.
+
+        The timeouts must be CONSECUTIVE. A crawler that fails, succeeds, then
+        fails again is slow, not dead, and still finds businesses Maps misses.
+        """
+        from agent1.lead_harvester import _CRAWL_GIVE_UP_AFTER
+
+        def run(outcomes):
+            """Replay the harvester's give-up rule over a list of round results."""
+            timeouts = 0
+            given_up = False
+            asked = 0
+            for ok in outcomes:
+                if given_up:
+                    continue
+                asked += 1
+                if ok:
+                    timeouts = 0
+                else:
+                    timeouts += 1
+                    if timeouts >= _CRAWL_GIVE_UP_AFTER:
+                        given_up = True
+            return asked, given_up
+
+        # Alternating failure and success: never gives up, always asked.
+        asked, given_up = run([False, True] * 6)
+        self.assertFalse(given_up,
+                         "non-consecutive timeouts must not disable the crawler")
+        self.assertEqual(asked, 12)
+
+        # The Seattle shape: it never answers. Asked only until the limit.
+        asked, given_up = run([False] * 18)
+        self.assertTrue(given_up)
+        self.assertEqual(
+            asked, _CRAWL_GIVE_UP_AFTER,
+            f"18 dead rounds should cost {_CRAWL_GIVE_UP_AFTER} crawl attempts, "
+            f"not {asked} - that waste was 42 minutes of a 60-minute hunt")
 
 
 class ExhaustedTownProtectionTests(unittest.TestCase):

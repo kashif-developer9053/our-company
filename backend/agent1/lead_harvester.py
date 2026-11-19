@@ -309,6 +309,11 @@ _BARREN_LIMIT_THIN = 6
 # round is cut short and the next template tried instead.
 _SKIP_EXTRA_SOURCES_WHEN_BARREN = True
 
+# Consecutive web-crawl timeouts before the hunt stops asking it. See the
+# comment in harvest_leads: a Seattle hunt spent 42 of 60 minutes on a crawler
+# that timed out every single round.
+_CRAWL_GIVE_UP_AFTER = 2
+
 # A hunt returning fewer than this has not really answered the question, so it
 # escalates to nearby-area searches before reporting back.
 _MIN_ACCEPTABLE = 20
@@ -521,6 +526,19 @@ async def harvest_leads(
     rejected = {"no_contact": 0, "good_site": 0, "guessed_email_only": 0,
                 "wrong_contact_type": 0, "chain_branch": 0}
     rounds_run = 0
+    # The web crawler is allowed to fail twice before the hunt stops asking.
+    #
+    # Measured from a real Seattle hunt on 2026-11-19: the crawl timed out at
+    # exactly _SOURCE_TIMEOUT_FAR (140s) on all 18 rounds and contributed
+    # nothing. That is 42 minutes of a 60-minute hunt spent waiting for a
+    # source that had already proved it could not answer this query.
+    #
+    # Two strikes rather than one: a single timeout can be a slow engine or a
+    # throttle that clears. Two in a row is a pattern, and the remaining
+    # rounds are better spent on Maps, which was returning 23-40 businesses
+    # every time.
+    crawl_timeouts = 0
+    crawl_given_up = False
     barren_rounds = 0  # consecutive rounds that surfaced no new businesses
     # Consecutive rounds where EVERY source timed out, i.e. nothing was
     # searched at all. Counted separately from barren rounds because the two
@@ -616,18 +634,28 @@ async def harvest_leads(
             # nothing. But never skip it on the FIRST round: Maps can repeat
             # itself immediately in a small town, and bailing out that early meant
             # the crawler never ran at all for the whole hunt.
-            if not sweep and not (maps_was_barren and rounds_run > 1
-                                  and _SKIP_EXTRA_SOURCES_WHEN_BARREN):
+            if not sweep and not crawl_given_up and not (
+                    maps_was_barren and rounds_run > 1
+                    and _SKIP_EXTRA_SOURCES_WHEN_BARREN):
                 try:
                     say(f"Round {rounds_run}: checking published websites…")
                     mined = await asyncio.wait_for(
                         mine_business_websites(query, max_results=_PER_ROUND),
                         timeout=_src_timeout)
                     any_source_answered = True
+                    crawl_timeouts = 0          # it answered; forget past misses
                     if mined.get("ok"):
                         fresh.extend(mined.get("leads", []))
                 except asyncio.TimeoutError:
-                    say(f"Round {rounds_run}: web crawl took too long — moving on.")
+                    crawl_timeouts += 1
+                    if crawl_timeouts >= _CRAWL_GIVE_UP_AFTER:
+                        crawl_given_up = True
+                        say(f"Round {rounds_run}: the web crawler has timed out "
+                            f"{crawl_timeouts} rounds running — skipping it for the "
+                            f"rest of this hunt and spending the time on Maps "
+                            f"instead.")
+                    else:
+                        say(f"Round {rounds_run}: web crawl took too long — moving on.")
                 except Exception as exc:  # noqa: BLE001
                     log.error("Web mining round failed (isolated): %s", exc)
             # 3) Businesses that exist only on Facebook/Instagram. Maps and the web
@@ -809,12 +837,20 @@ async def harvest_leads(
             except Exception as exc:  # noqa: BLE001
                 log.error("Widened maps round failed (isolated): %s", exc)
             try:
-                if not sweep:
+                # Honour the give-up decision made in the main loop. Without
+                # this the widening phase re-asks a crawler already proven
+                # dead, adding five more full-ceiling timeouts to a hunt that
+                # had just stopped paying them.
+                if not sweep and not crawl_given_up:
                     wres = await asyncio.wait_for(
                         mine_business_websites(query, max_results=_PER_ROUND),
                         timeout=_src_timeout)
                     if wres.get("ok"):
                         wider.extend(wres.get("leads", []))
+            except asyncio.TimeoutError:
+                crawl_timeouts += 1
+                if crawl_timeouts >= _CRAWL_GIVE_UP_AFTER:
+                    crawl_given_up = True
             except Exception as exc:  # noqa: BLE001
                 log.error("Widened mining round failed (isolated): %s", exc)
 
