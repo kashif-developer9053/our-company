@@ -357,6 +357,50 @@ class ScraperSpeedTests(unittest.TestCase):
                     _phone_from_card(card), "",
                     "a digit run with no dialing prefix is not a phone number")
 
+    def test_icon_font_glyphs_never_reach_a_lead(self):
+        """Maps draws card badges with an icon font, not with text.
+
+        Captured live from the VPS on 2026-11-19, a real Lahore lead came
+        back with address '\\ue934 152 G1 Canal Rd'. U+E934 is a Private
+        Use Area codepoint - a glyph in Google's own font with no Unicode
+        meaning - and it is NOT whitespace, so str.strip() leaves it in
+        place. It would reach the CRM and the outreach email as a broken
+        box, in the address and potentially in the business name that
+        opens the email.
+        """
+        from agent1.scraper import _build_lead, _phone_from_card
+
+        card = ("DH Dental Clinic\nDH Dental Clinic\n4.9(78)\n"
+                "Dental clinic \u00b7 \ue934 \u00b7 152 G1 Canal Rd\n"
+                "Open \u00b7 Closes 6 PM \u00b7 +92 322 3368251")
+        lead = _build_lead("\ue934DH Dental Clinic", card,
+                           _phone_from_card(card), "http://www.dh.dental/")
+
+        for field in ("business_name", "category", "address", "phone"):
+            with self.subTest(field=field):
+                value = lead[field]
+                self.assertFalse(
+                    any(0xE000 <= ord(c) <= 0xF8FF for c in value),
+                    f"{field}={value!r} still carries an icon-font glyph")
+        self.assertEqual(lead["address"], "152 G1 Canal Rd")
+        self.assertEqual(lead["business_name"], "DH Dental Clinic")
+
+    def test_stripping_a_glyph_does_not_join_two_words(self):
+        """A glyph between words stands for a space, not for nothing.
+
+        Deleting it outright would turn "Wheelchair<glyph>accessible" into
+        "Wheelchairaccessible", which is worse than the broken box because
+        it looks like real text and would never be noticed.
+        """
+        from agent1.scraper import _strip_icon_glyphs
+
+        self.assertEqual(
+            _strip_icon_glyphs("Wheelchair\ue934accessible entrance"),
+            "Wheelchair accessible entrance")
+        self.assertEqual(_strip_icon_glyphs("\ue934"), "")
+        self.assertEqual(_strip_icon_glyphs(""), "")
+        self.assertEqual(_strip_icon_glyphs("\ue934 Main Rd"), "Main Rd")
+
     def test_googles_own_links_are_not_recorded_as_the_website(self):
         """A card contains Google links too (the place link, Directions).
 

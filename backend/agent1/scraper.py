@@ -286,6 +286,36 @@ _CATEGORY_WORDS = ("clinic", "dentist", "doctor", "hospital", "centre", "center"
 _HOURS_PREFIX = ("open", "clos", "reopen", "temporarily", "permanently", "·")
 
 
+# Maps renders badges (accessibility, "Open now", service icons) with an icon
+# font, so the card text contains Private Use Area codepoints where a glyph
+# was drawn. A real Lahore card gave:
+#
+#     address = '\ue934 152 G1 Canal Rd'
+#
+# which is not whitespace - str.strip() leaves it in place - and would reach
+# the CRM and the outreach emails as a broken box. There is no Unicode name
+# for these; the meaning lives only in Google's font, so the only correct
+# handling is to drop them.
+#
+# U+E000-U+F8FF is the Basic Multilingual Plane's PUA block. The two
+# supplementary PUA planes are included for completeness.
+_PUA_RANGES = ((0xE000, 0xF8FF), (0xF0000, 0xFFFFD), (0x100000, 0x10FFFD))
+
+
+def _strip_icon_glyphs(text: str) -> str:
+    """Remove icon-font codepoints, then collapse the gaps they leave."""
+    if not text:
+        return ""
+    out = []
+    for ch in text:
+        cp = ord(ch)
+        if any(lo <= cp <= hi for lo, hi in _PUA_RANGES):
+            out.append(" ")          # a space, so words do not run together
+        else:
+            out.append(ch)
+    return re.sub(r"\s+", " ", "".join(out)).strip()
+
+
 def _category_and_address(card_text: str, name: str) -> tuple[str, str]:
     """Split the card's category line into (category, address).
 
@@ -309,18 +339,22 @@ def _category_and_address(card_text: str, name: str) -> tuple[str, str]:
         # Skip the hours line ("Open · Closes 6 PM · +92 322 3368251").
         if head.lower().startswith(_HOURS_PREFIX):
             continue
-        category = head if len(head) < 60 else ""
-        address = " ".join(parts[1:])[:200]
+        category = _strip_icon_glyphs(head) if len(head) < 60 else ""
+        address = _strip_icon_glyphs(" ".join(parts[1:]))[:200]
         return category, address
     # No dotted line: fall back to a short line that reads like a category.
     for line in lines[:6]:
         low = line.lower()
         if low != nm and len(line) < 40 and any(w in low for w in _CATEGORY_WORDS):
-            return line, ""
+            return _strip_icon_glyphs(line), ""
     return "", ""
 
 
 def _build_lead(name: str, card_text: str, phone: str, website: str) -> dict:
+    # The name arrives from the card's aria-label rather than its text, but it
+    # can carry the same icon-font glyphs. This is the field that goes into the
+    # email greeting, so a broken box here is the most visible failure of all.
+    name = _strip_icon_glyphs(name)
     category, address = _category_and_address(card_text, name)
     rating, reviews = _parse_rating(card_text)
     return {
