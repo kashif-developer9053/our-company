@@ -235,7 +235,64 @@ _INSTITUTIONAL = (
     r"board of intermediate", r"\bbise\b", r"\bhec\b", r"higher education commission",
     r"punjab university", r"university of the punjab", r"quaid-?i-?azam university",
     r"\bnust\b", r"\buet\b", r"\bnca\b",
+
+    # --- Outside Pakistan -------------------------------------------------
+    # Everything above names a Pakistani institution, so a hunt abroad had no
+    # institutional filter at all. A real "Clinic in Seattle" hunt on
+    # 2026-11-19 returned King County's public health department and Seattle
+    # University's student health centre as prospects.
+    #
+    # Only wording that is unambiguously governmental or academic lives here.
+    # Private hospital NETWORKS (Swedish, One Medical, Neighborcare, UW
+    # Medicine, PacMed) are deliberately NOT listed: maintaining a roster of
+    # every health network on earth does not scale and silently rots. They are
+    # caught by shared-domain detection in the harvester instead, which needs
+    # no names at all - see _mark_chain_branches in lead_harvester.py.
+    #
+    # Each pattern is matched on the NAME only, so "University Dental Care"
+    # and "County Road Dental" - real private practices - are not caught by a
+    # bare keyword.
+    r"\b(?:county|city|state|municipal|borough|township) (?:of |health|public health|government|council|department)",
+    r"\bpublic health (?:department|center|centre|unit|district|authority)\b",
+    r"\bdepartment of (?:health|human services|veterans)\b",
+    r"\bhealth (?:department|authority|district|board)\b",
+    r"\bveterans affairs\b", r"\bva (?:medical cent|clinic|hospital)",
+    r"\bcity hall\b",
+    # UK / Commonwealth and Gulf public health bodies.
+    r"\bnhs\b", r"national health service",
+    r"ministry of (?:health|education|interior|finance)\b",
+    # Universities and colleges running their own clinics. "University" alone
+    # is too broad, so it needs an institutional noun beside it.
+    r"\buniversity (?:of|health|medical|hospital|student|clinic|college|campus)\b",
+    r"\b(?:student|campus) health (?:cent|clinic|service)",
+    r"\bcollege of (?:medicine|nursing|dentistry|pharmacy)\b",
+    r"\bschool district\b",
+    r"\bteaching hospital\b", r"\bmedical school\b",
 )
+
+
+# A business is a branch of a chain when several DIFFERENT businesses in the
+# same hunt publish the same website. No list of brand names can keep up with
+# the world's hospital groups, dental chains and clinic networks, and a list
+# built for one country is worthless in the next. This signal needs no names:
+# it worked unchanged on a Seattle search that returned uwmedicine.org twice,
+# neighborcare.org twice, pacificmedicalcenters.org twice, sihb.org twice and
+# seattleroots.org twice - the last linking "Country Doctor Community Clinic"
+# to "After Hours Clinic", two names sharing no words at all.
+#
+# Why a chain branch is not a prospect: the website belongs to the group, not
+# the branch, and the branch manager cannot commission a rebuild of it. The
+# cold email would reach someone with no authority over the thing being
+# pitched.
+CHAIN_MIN_BRANCHES = 2
+
+
+def mark_chain_branch(lead: dict, reason: str) -> None:
+    """Record that this lead is one location of a larger group."""
+    lead["chain_branch"] = True
+    lead["chain_reason"] = reason
+
+
 _INSTITUTIONAL_RE = re.compile("|".join(_INSTITUTIONAL), re.I)
 
 

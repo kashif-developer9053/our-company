@@ -191,6 +191,16 @@ async def scrape_google_maps(query: str, max_results: int = 20) -> dict:
                 except Exception as exc:  # noqa: BLE001 - one bad card is survivable
                     log.warning("Skipping card %d: %s", i, exc)
 
+            # Stop intercepting before the context goes away. Requests still
+            # in flight when the browser closes otherwise fire the handler
+            # against a dead target, and Playwright prints a TargetClosedError
+            # traceback for each one - alarming in the log, and easy to
+            # mistake for a scrape failure when it is only shutdown noise.
+            try:
+                await context.unroute_all(behavior="ignoreErrors")
+            except Exception:  # noqa: BLE001 - older Playwright lacks it
+                pass
+
         return {"ok": True, "blocked": False, "message": f"Scraped {len(leads)} businesses.", "leads": leads}
     except Exception as exc:  # noqa: BLE001
         log.error("Scrape job failed: %s", exc)

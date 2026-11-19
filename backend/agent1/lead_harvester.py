@@ -14,6 +14,7 @@ it never spins forever.
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from datetime import datetime, timezone
 
@@ -336,6 +337,64 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _site_domain(lead: dict) -> str:
+    """The registrable-ish host of a lead's website, lowercased.
+
+    Deliberately simple: strip scheme, www and path. Comparing hosts is enough
+    to spot two branches sharing one site, and a full public-suffix parse would
+    add a dependency for no gain here.
+    """
+    url = str(lead.get("website") or "").strip().lower()
+    if not url:
+        return ""
+    url = re.sub(r"^https?://", "", url)
+    url = url.split("/", 1)[0].split("?", 1)[0]
+    if url.startswith("www."):
+        url = url[4:]
+    return url.strip(".")
+
+
+def _mark_chain_branches(pool: dict, fresh: list[dict]) -> int:
+    """Flag leads that are one location of a multi-branch group.
+
+    When several DIFFERENT businesses in the same hunt publish the same
+    website, they are branches of one organisation. The site belongs to the
+    group, so the branch cannot commission work on it and a cold email reaches
+    someone with no authority over what is being pitched.
+
+    Counted across the WHOLE run, not one round: a Seattle search returned
+    swedish.org and onemedical.com once each in any single round, but a hunt
+    runs a dozen rounds and the same domains come back. `pool` is the running
+    record of every business seen, which is why this is checked here rather
+    than inside the scraper.
+
+    Returns how many leads in `fresh` were newly flagged.
+    """
+    from agent2.icp import CHAIN_MIN_BRANCHES, mark_chain_branch
+
+    # business-name -> domain, over everything seen so far plus this round.
+    by_domain: dict[str, set] = {}
+    for lead in list(pool.values()) + list(fresh):
+        dom = _site_domain(lead)
+        name = str(lead.get("business_name") or "").strip().lower()
+        if dom and name:
+            by_domain.setdefault(dom, set()).add(name)
+
+    flagged = 0
+    for lead in fresh:
+        if lead.get("chain_branch"):
+            continue
+        dom = _site_domain(lead)
+        others = by_domain.get(dom, set())
+        if dom and len(others) >= CHAIN_MIN_BRANCHES:
+            mark_chain_branch(
+                lead,
+                f"{len(others)} locations in this search share {dom} — a branch "
+                f"of a larger group, so the website is not theirs to change")
+            flagged += 1
+    return flagged
+
+
 def _lead_key(lead: dict) -> str:
     site = (lead.get("website") or "").strip().lower()
     if site:
@@ -460,7 +519,7 @@ async def harvest_leads(
     pool: dict[str, dict] = {}       # every business seen this run
     qualified: dict[str, dict] = {}  # those meeting BOTH criteria
     rejected = {"no_contact": 0, "good_site": 0, "guessed_email_only": 0,
-                "wrong_contact_type": 0}
+                "wrong_contact_type": 0, "chain_branch": 0}
     rounds_run = 0
     barren_rounds = 0  # consecutive rounds that surfaced no new businesses
     # Consecutive rounds where EVERY source timed out, i.e. nothing was
@@ -654,9 +713,22 @@ async def harvest_leads(
             log.error("Audit failed (isolated): %s", exc)
 
         # 5) Apply BOTH gates.
+        #
+        # First mark branches of multi-location groups. A Seattle clinic hunt
+        # returned ten of twenty results as branches (uwmedicine.org,
+        # neighborcare.org, pacificmedicalcenters.org, sihb.org and
+        # seattleroots.org, two each) and every one of them passed every gate,
+        # which is why that hunt ran 13 rounds for zero leads.
+        chain_flagged = _mark_chain_branches(pool, fresh)
+        if chain_flagged:
+            log.info("Round %d: %d chain branches flagged", rounds_run, chain_flagged)
+
         for lead in fresh:
             key = _lead_key(lead)
             if key in qualified:
+                continue
+            if lead.get("chain_branch"):
+                rejected["chain_branch"] += 1
                 continue
             contact_ok, contact_desc = has_real_contact(lead)
             if not contact_ok:
@@ -686,8 +758,12 @@ async def harvest_leads(
             if len(qualified) >= target:
                 break
 
+        parts = [f"{rejected['no_contact']} no contact",
+                 f"{rejected['good_site']} site already fine"]
+        if rejected["chain_branch"]:
+            parts.append(f"{rejected['chain_branch']} chain branches")
         say(f"Round {rounds_run} done — {len(qualified)}/{target} qualified "
-            f"({rejected['no_contact']} no contact, {rejected['good_site']} site already fine)")
+            f"({', '.join(parts)})")
 
     # Still short after every template? The businesses are usually there, just
     # not ranking under this exact city wording. Retry with nearby-area phrasing
