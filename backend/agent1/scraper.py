@@ -210,8 +210,37 @@ async def scrape_google_maps(query: str, max_results: int = 20) -> dict:
                 await feed.evaluate("el => el.scrollBy(0, el.scrollHeight)")
                 await _pause(0.7, 1.5)
 
-            cards = feed.locator("> div")
+            # Find the cards by what they ARE, not by where they sit.
+            #
+            # This was `feed.locator("> div")` - the feed's direct children -
+            # and it returned zero leads for every hunt on the VPS while
+            # working fine from a developer machine. Google serves more than
+            # one Maps layout, and the two differ by one anonymous wrapper:
+            #
+            #   worked:   div[role=feed] > div[role=article]
+            #   VPS:      div[role=feed] > div > div[role=article]
+            #
+            # Under the second layout "> div" matched that single wrapper,
+            # which holds no place link of its own, so the loop skipped it and
+            # every round reported no businesses. The harvester then said the
+            # niche looked exhausted, which is how a selector bug came to read
+            # as a market with no landscapers in Seattle.
+            #
+            # role="article" is the card's own identity and survives either
+            # nesting. The descendant search is deliberate: it does not care
+            # how many wrappers Google adds next.
+            cards = feed.locator("div[role='article']")
             total = await cards.count()
+            if not total:
+                # Older or future layouts may not label the cards. Fall back to
+                # the closest ancestor that actually contains a place link,
+                # rather than returning nothing: a wrong-but-present card is
+                # recoverable by _build_lead, an empty hunt is not.
+                cards = feed.locator(f"div:has(> {place_sel})")
+                total = await cards.count()
+                if total:
+                    log.info("Maps layout has no role=article cards; "
+                             "fell back to place-link parents (%d).", total)
             for i in range(total):
                 if len(leads) >= max_results:
                     break
