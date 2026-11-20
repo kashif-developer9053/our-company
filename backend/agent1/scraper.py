@@ -21,10 +21,53 @@ from shared.logger import get_logger
 
 log = get_logger("agent1.scraper")
 
-_UA = (
+# Fallback only. The real user agent is derived from the running browser by
+# _ua_for(), below; this value is used only if the version string cannot be
+# read, and is deliberately a plausible recent Chrome rather than a fixed old
+# one.
+_UA_FALLBACK = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+    "(KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36"
 )
+
+
+def _ua_for(browser) -> str:
+    """Claim the version of the browser that is actually running.
+
+    This function exists because of a measured outage. The scraper used to
+    send a hardcoded `Chrome/125.0.0.0` while the installed Chromium was 151 -
+    about two years of drift, because the constant was written once and the
+    browser is upgraded by `pip install playwright` on every deploy.
+
+    Google reads that mismatch as automation. Measured on the VPS, same code,
+    same query, three probes:
+
+        stale UA (125), resources blocked -> FAIL, 60s timeout, 0 cards
+        real  UA (151), resources blocked -> feed found, 10 cards
+        real  UA (151), nothing blocked   -> feed found, 10 cards
+
+    It had been returning zero businesses for every round of every hunt, which
+    read as "this market has no businesses" rather than as a scraper fault.
+    The same code kept working from a home connection, where a residential IP
+    buys enough benefit of the doubt to survive the bad UA - so the bug only
+    appeared in production.
+
+    Deriving the string from `browser.version` means it cannot drift again:
+    the claim is true by construction, whatever Playwright installs next.
+    """
+    try:
+        # browser.version is like "151.0.7922.34" (Chromium) or
+        # "Chrome/151.0.7922.34" depending on the channel.
+        raw = (browser.version or "").strip()
+        ver = raw.split("/")[-1]                    # drop any "Chrome/" prefix
+        major = ver.split(".")[0]
+        if major.isdigit():
+            return (f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    f"AppleWebKit/537.36 (KHTML, like Gecko) "
+                    f"Chrome/{major}.0.0.0 Safari/537.36")
+    except Exception:  # noqa: BLE001 - a UA is never worth failing a hunt for
+        pass
+    return _UA_FALLBACK
 
 
 # Resource types refused in the Maps tab. Images, media and fonts are pure
@@ -83,7 +126,9 @@ async def scrape_google_maps(query: str, max_results: int = 20) -> dict:
                 "--disable-dev-shm-usage",
                 "--disable-gpu",
             ])
-            context = await browser.new_context(user_agent=_UA, viewport={"width": 1280, "height": 900}, locale="en-US")
+            context = await browser.new_context(
+                user_agent=_ua_for(browser),
+                viewport={"width": 1280, "height": 900}, locale="en-US")
 
             # Block everything we do not read. Maps is a MAP: it pulls down
             # tiles, photos, icons and fonts by the megabyte, and this scraper
