@@ -274,7 +274,12 @@ _PER_ROUND = 40
 # retry headroom, and still well under the round budget. The variance is why
 # it is not set near the mean: a limit near the average fails about half the
 # time, and half the rounds of every hunt were the half that failed.
-_SOURCE_TIMEOUT = 120  # seconds for one source in one round
+#
+# Raised again after the scrape was measured working end to end: 115s, 118s,
+# 121s and 126s for five leads on the VPS. 120s sat *below* three of those
+# four successes, so the ceiling meant to catch a wedged source was instead
+# discarding ordinary ones.
+_SOURCE_TIMEOUT = 240  # seconds for one source in one round
 
 # ...but 75s is measured from HERE. On 2026-11-18 a Memphis search timed out
 # at 75s while a Lahore search returned five leads in 39s from the same
@@ -288,7 +293,11 @@ _SOURCE_TIMEOUT = 120  # seconds for one source in one round
 # Distant queries keep more headroom still: the figures above are for a US
 # query from this server, which is already the "far" case, so 140s remains
 # the right shape - comfortably above the 120s home ceiling.
-_SOURCE_TIMEOUT_FAR = 160
+# The measurements above ARE the far case - a US query from this server - so
+# this is the number that governs in practice. 300s is roughly 2.4x the
+# observed worst case, which is the right shape for a limit whose job is to
+# catch a hang rather than to hurry a slow success.
+_SOURCE_TIMEOUT_FAR = 300
 
 # Where we are. Queries inside this country use the normal timeout; everything
 # else gets the longer one, because distance to the result is the thing being
@@ -624,7 +633,8 @@ async def harvest_leads(
             # 1) Google Maps (good for phone numbers + addresses)
             try:
                 maps = await asyncio.wait_for(
-                    scrape_google_maps(query, max_results=_PER_ROUND),
+                    scrape_google_maps(query, max_results=_PER_ROUND,
+                                       country=country),
                     timeout=_src_timeout)
                 any_source_answered = True
                 if maps.get("ok"):
@@ -861,7 +871,8 @@ async def harvest_leads(
             wider: list[dict] = []
             try:
                 mres = await asyncio.wait_for(
-                    scrape_google_maps(query, max_results=_PER_ROUND),
+                    scrape_google_maps(query, max_results=_PER_ROUND,
+                                       country=country),
                     timeout=_src_timeout)
                 if mres.get("ok"):
                     wider.extend(mres.get("leads", []))

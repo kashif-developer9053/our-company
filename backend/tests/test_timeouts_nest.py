@@ -43,9 +43,15 @@ from agent1 import lead_harvester as H  # noqa: E402
 from agent1 import scraper as S  # noqa: E402
 
 
-# The slowest full render observed on the VPS. Any ceiling at or below this
-# would have cut off a scrape that was working.
-_SLOWEST_OBSERVED_SUCCESS = 69
+# The slowest SUCCESSFUL scrape observed on the VPS. Any ceiling at or below
+# this would cut off a scrape that was working.
+#
+# First recorded as 69s, from runs where the layout bug was still making some
+# attempts fail fast. Once the scrape worked end to end, four consecutive runs
+# returning five leads each measured 115s, 118s, 121s and 126s - so three of
+# the four exceeded the 120s ceiling that was in place at the time, and the
+# limit meant to catch a wedged source was discarding ordinary ones.
+_SLOWEST_OBSERVED_SUCCESS = 126
 
 
 class TimeoutsNestTests(unittest.TestCase):
@@ -136,6 +142,34 @@ class RoundBudgetSanityTests(unittest.TestCase):
         self.assertLess(
             H._ROUND_TIMEOUT, 600,
             "a round that may run ten minutes makes a hunt one long silence")
+
+    def test_a_hunt_fits_enough_rounds_to_find_anything(self):
+        """Patience has a price, and this is where it is paid.
+
+        Each round tries one query template. One round finds a handful of
+        businesses, most of which fail a gate, so a hunt that fits only two or
+        three rounds cannot reach a useful target however patient it is - and
+        it would report that as an exhausted market, which is the failure this
+        whole exercise has been about.
+
+        Checked against the MEASURED scrape time rather than the ceiling,
+        because the ceiling is the bad case and the measurement is the normal
+        one. At 126s a one-hour hunt fits about 28 rounds; the ceilings only
+        bite when something is genuinely wrong.
+        """
+        rounds_when_working = H._DEFAULT_TIME_BUDGET // _SLOWEST_OBSERVED_SUCCESS
+        self.assertGreaterEqual(
+            rounds_when_working, 10,
+            f"at the measured {_SLOWEST_OBSERVED_SUCCESS}s per scrape, a "
+            f"{H._DEFAULT_TIME_BUDGET}s hunt fits only {rounds_when_working} "
+            f"rounds - too few query templates to find leads")
+
+        worst_case_rounds = H._DEFAULT_TIME_BUDGET // H._ROUND_TIMEOUT
+        self.assertGreaterEqual(
+            worst_case_rounds, 5,
+            f"if every round hit its {H._ROUND_TIMEOUT}s ceiling the hunt "
+            f"would manage {worst_case_rounds} rounds, which is not enough "
+            f"to distinguish a slow market from an empty one")
 
     def test_the_timeout_round_limit_still_stops_a_dead_market(self):
         """Longer ceilings make giving up early more important, not less.

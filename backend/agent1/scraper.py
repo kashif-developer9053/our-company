@@ -102,8 +102,22 @@ _BLOCKED_RESOURCES = {"image", "media", "font"}
 # A hunt that waits 90s and finds 20 businesses beats one that gives up at
 # 45s and finds nothing - the round is wasted either way, but only one of
 # them produces leads.
-_GOTO_TIMEOUT_MS = 90_000
-_FEED_TIMEOUT_MS = 45_000
+#
+# Updated with four more measurements once the scrape was working end to end
+# on the VPS, 2026-11-21:
+#
+#     full scrape, 5 leads:  115s, 118s, 121s, 126s
+#
+# Consistent, unlike the earlier spread of 2-58s navigation times - that
+# erraticism was partly the layout bug making some runs fail fast. The honest
+# figure for this server is about two minutes for a working scrape.
+#
+# 90s + 45s allowed 135s in total, which cleared 126s by nine seconds. A
+# margin that thin is not a margin: a hunt calls this dozens of times, so the
+# slowest call of twenty decides whether the round produces leads, and the
+# cost of being wrong is another round reported as an empty market.
+_GOTO_TIMEOUT_MS = 150_000
+_FEED_TIMEOUT_MS = 60_000
 
 
 async def _pause(a: float = 1.0, b: float = 4.0) -> None:
@@ -130,8 +144,18 @@ async def _launch_browser(playwright):
     ])
 
 
-async def scrape_google_maps(query: str, max_results: int = 20) -> dict:
-    """Return {ok, blocked, message, leads:[...]}. Never raises."""
+async def scrape_google_maps(query: str, max_results: int = 20,
+                             country: str = "") -> dict:
+    """Return {ok, blocked, message, leads:[...]}. Never raises.
+
+    `country` is used only to put phone numbers into international form. It is
+    passed explicitly rather than read out of `query`, because matching a
+    country name inside the query string is ambiguous: "Landscapers in
+    Seattle, United States" contains one country, but a query naming two
+    places would silently pick whichever the table happened to match first,
+    and stamp a US number with a Pakistani code. Callers know the country;
+    they should say it.
+    """
     try:
         from playwright.async_api import async_playwright
     except Exception as exc:  # noqa: BLE001
@@ -285,7 +309,9 @@ async def scrape_google_maps(query: str, max_results: int = 20) -> dict:
                     out = card.locator("a[href^='http']:not([href*='google.'])")
                     if await out.count():
                         website = (await out.first.get_attribute("href")) or ""
-                    leads.append(_build_lead(name, card_text, _phone_from_card(card_text), website))
+                    leads.append(_build_lead(
+                        name, card_text, _phone_from_card(card_text), website,
+                        country=country))
                 except Exception as exc:  # noqa: BLE001 - one bad card is survivable
                     log.warning("Skipping card %d: %s", i, exc)
 
@@ -346,6 +372,133 @@ _CARD_PHONE_RE = re.compile(
     )""",
     re.VERBOSE,
 )
+
+
+# Country dialling codes, for turning a locally-formatted number into one
+# that can actually be dialled from anywhere.
+#
+# Maps prints phones the way the country writes them, and WHICH way depends on
+# the layout Google serves. The same Seattle query gave "+1 206-608-2614" from
+# one machine and "(206) 608-2614" from another, minutes apart. Nothing
+# downstream normalised either, so a lead's phone reached the CRM and Agent 3
+# in whatever shape it arrived.
+#
+# "(206) 608-2614" is not wrong, it is incomplete: it dials from inside the
+# US and fails from Pakistan, which is where it would be dialled from. A
+# number that cannot be rung is the same as no number for the one job the
+# field has.
+#
+# Keyed by the country string the hunt already carries, so no lookup service
+# and no guessing from the digits. Only the countries this app hunts in are
+# listed; an unknown country leaves the number exactly as Maps printed it,
+# which is no worse than today.
+_DIAL_CODES = {
+    "pakistan": "92",
+    "united states": "1",
+    "usa": "1",
+    "us": "1",
+    "canada": "1",
+    "united kingdom": "44",
+    "uk": "44",
+    "united arab emirates": "971",
+    "uae": "971",
+    "saudi arabia": "966",
+    "australia": "61",
+    "india": "91",
+    "bangladesh": "880",
+    "germany": "49",
+    "france": "33",
+    "ireland": "353",
+    "new zealand": "64",
+    "south africa": "27",
+    "singapore": "65",
+    "malaysia": "60",
+    "qatar": "974",
+    "kuwait": "965",
+    "oman": "968",
+    "bahrain": "973",
+    "turkey": "90",
+}
+
+
+def _dial_code_for(country: str) -> str:
+    """The international dialling code for a country name, or ""."""
+    key = (country or "").strip().lower()
+    if not key:
+        return ""
+    if key in _DIAL_CODES:
+        return _DIAL_CODES[key]
+    # "Seattle, United States" and "United States of America" both arrive.
+    for name, code in _DIAL_CODES.items():
+        if name in key:
+            return code
+    return ""
+
+
+def normalise_phone(phone: str, country: str = "") -> str:
+    """Return the phone in international form when the country is known.
+
+    Already-international numbers are left alone. A local number gains its
+    country's code, with the trunk prefix dropped: a UK "020 7946 0958" is
+    "+44 20 7946 0958", not "+44 020 ...". Anything unrecognised is returned
+    unchanged - a slightly odd number is recoverable by a human, an empty
+    field is not.
+    """
+    phone = (phone or "").strip()
+    if not phone:
+        return ""
+    if phone.startswith("+"):
+        return phone                     # already dialable from anywhere
+
+    code = _dial_code_for(country)
+    if not code:
+        return phone                     # unknown country: do not invent one
+
+    digits = re.sub(r"\D", "", phone)
+    if not digits:
+        return phone
+
+    # Already carries the country code without the plus, e.g. "92 322 ...".
+    if digits.startswith(code) and len(digits) > len(code) + 6:
+        return f"+{code} {_regroup(phone, digits[len(code):])}"
+
+    # Trunk prefix: the 0 that means "another city in this country" and is
+    # replaced by the country code, never kept alongside it.
+    local = digits.lstrip("0") if digits.startswith("0") else digits
+
+    if len(local) < 6:                   # too short to be a real number
+        return phone
+    return f"+{code} {_regroup(phone, local)}"
+
+
+def _regroup(original: str, digits: str) -> str:
+    """Re-apply the original number's spacing to a digit string.
+
+    Without this the result is "+1 2066082614" - dialable, but a wall of
+    digits that a human has to parse character by character when checking a
+    lead before Agent 3 calls it. Google already grouped the number the way
+    its country reads, so that grouping is reused rather than invented:
+    "(206) 608-2614" becomes "+1 206-608-2614".
+
+    Falls back to the bare digits if the original's grouping does not fit what
+    is left after a trunk prefix was removed, since a wrong grouping would be
+    more confusing than none.
+    """
+    groups = re.findall(r"\d+", original or "")
+    # Drop a leading trunk "0" group so the shapes line up.
+    if groups and groups[0] == "0":
+        groups = groups[1:]
+    elif groups and groups[0].startswith("0") and len(groups[0]) > 1:
+        groups = [groups[0].lstrip("0")] + groups[1:]
+
+    if sum(len(g) for g in groups) != len(digits) or len(groups) < 2:
+        return digits
+
+    out, i = [], 0
+    for g in groups:
+        out.append(digits[i:i + len(g)])
+        i += len(g)
+    return "-".join(out)
 
 
 def _phone_from_card(card_text: str) -> str:
@@ -458,7 +611,8 @@ def _category_and_address(card_text: str, name: str) -> tuple[str, str]:
     return "", ""
 
 
-def _build_lead(name: str, card_text: str, phone: str, website: str) -> dict:
+def _build_lead(name: str, card_text: str, phone: str, website: str,
+                country: str = "") -> dict:
     # The name arrives from the card's aria-label rather than its text, but it
     # can carry the same icon-font glyphs. This is the field that goes into the
     # email greeting, so a broken box here is the most visible failure of all.
@@ -468,7 +622,11 @@ def _build_lead(name: str, card_text: str, phone: str, website: str) -> dict:
     return {
         "business_name": name,
         "category": category,
-        "phone": phone,
+        # Stored in international form so it can be dialled from here. Maps
+        # prints it however the country writes it, and which way depends on
+        # the layout served - the same Seattle query gave "+1 206-608-2614"
+        # and "(206) 608-2614" minutes apart.
+        "phone": normalise_phone(phone, country),
         "website": website,
         "address": address,
         "appears_no_website": not bool(website),

@@ -132,12 +132,37 @@ class ExhaustedTownProtectionTests(unittest.TestCase):
     """The hour-long-grind fix must survive the loosened skips."""
 
     def test_barren_limits_are_still_in_place(self):
+        """A dead town must still be abandoned in a sensible time.
+
+        This used to assert _SOURCE_TIMEOUT <= 120 and _ROUND_TIMEOUT <= 300
+        as fixed upper bounds, chosen when a Maps scrape was believed to take
+        well under a minute. Measured on the VPS, 2026-11-21, four
+        consecutive successful scrapes took 115s, 118s, 121s and 126s, so
+        those bounds were cutting off ordinary successes - see
+        test_timeouts_nest.py.
+
+        The intent was never the numbers. It is that a hunt finding nothing
+        gives up before it has eaten the whole budget, so the limits are now
+        expressed as that: the barren-round cutoff must fit comfortably
+        inside one hunt, whatever a single round costs.
+        """
         from agent1.lead_harvester import (_BARREN_LIMIT, _BARREN_LIMIT_THIN,
+                                           _DEFAULT_TIME_BUDGET,
                                            _ROUND_TIMEOUT, _SOURCE_TIMEOUT)
         self.assertLessEqual(_BARREN_LIMIT_THIN, 8)
         self.assertLessEqual(_BARREN_LIMIT, 8)
-        self.assertLessEqual(_SOURCE_TIMEOUT, 120)
-        self.assertLessEqual(_ROUND_TIMEOUT, 300)
+
+        # A source cannot outlast the round that contains it.
+        self.assertLess(_SOURCE_TIMEOUT, _ROUND_TIMEOUT)
+
+        # Enough barren rounds to be sure, at the worst possible round cost,
+        # must still leave the hunt time to have done something else first.
+        worst = _BARREN_LIMIT_THIN * _ROUND_TIMEOUT
+        self.assertLess(
+            worst, _DEFAULT_TIME_BUDGET,
+            f"{_BARREN_LIMIT_THIN} barren rounds at {_ROUND_TIMEOUT}s each is "
+            f"{worst}s, which exceeds the {_DEFAULT_TIME_BUDGET}s hunt budget "
+            f"- a dead town would consume the entire hunt before giving up")
 
     def test_a_dead_town_still_gives_up(self):
         """With every round barren, the hunt must stop within the limit."""
