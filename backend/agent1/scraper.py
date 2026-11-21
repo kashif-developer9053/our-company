@@ -83,6 +83,29 @@ def _ua_for(browser) -> str:
 _BLOCKED_RESOURCES = {"image", "media", "font"}
 
 
+# How long Maps is given to arrive, and then to draw its results.
+#
+# These were 45s and 12s, chosen on a developer machine where the whole page
+# renders in about 7 seconds. Measured on the VPS, same code and query, six
+# consecutive runs on 2026-11-21:
+#
+#     nav:   2s, 4s, 29s, 31s, 48s, 58s     (same URL, same minute)
+#     full:  59s, 61s, 69s to a drawn feed
+#
+# Every one of those runs delivered the businesses. No HTTP error was logged
+# on any of them - the page is simply slow to render from this machine, and
+# the old ceilings cut it off mid-draw and reported "no results feed found",
+# which the harvester passed on as an exhausted market.
+#
+# The variance is the point: a limit near the average fails about half the
+# time. These are set above the slowest success observed, not near the mean.
+# A hunt that waits 90s and finds 20 businesses beats one that gives up at
+# 45s and finds nothing - the round is wasted either way, but only one of
+# them produces leads.
+_GOTO_TIMEOUT_MS = 90_000
+_FEED_TIMEOUT_MS = 45_000
+
+
 async def _pause(a: float = 1.0, b: float = 4.0) -> None:
     await asyncio.sleep(random.uniform(a, b))
 
@@ -149,7 +172,8 @@ async def scrape_google_maps(query: str, max_results: int = 20) -> dict:
 
             page = await context.new_page()
             await page.goto(f"https://www.google.com/maps/search/{query.replace(' ', '+')}",
-                            wait_until="domcontentloaded", timeout=45000)
+                            wait_until="domcontentloaded",
+                            timeout=_GOTO_TIMEOUT_MS)
             # Was 2-4s. The pause exists to look human and to let the feed
             # render; with images blocked the feed is ready sooner, and the
             # explicit feed.wait_for() below is what actually guarantees it.
@@ -173,7 +197,7 @@ async def scrape_google_maps(query: str, max_results: int = 20) -> dict:
 
             feed = page.locator("div[role='feed']")
             try:
-                await feed.wait_for(timeout=12000)
+                await feed.wait_for(timeout=_FEED_TIMEOUT_MS)
             except Exception:  # noqa: BLE001
                 if "google.com/maps" not in page.url:
                     return {"ok": False, "blocked": True, "message": "Scraping paused — redirected away from Maps (possible block).", "leads": []}

@@ -255,9 +255,26 @@ _PER_ROUND = 40
 # and a source that exceeds it is abandoned so the next template can run.
 # 180s was still far too patient. Three sources run per round, so one round
 # could legitimately take 9 minutes of total silence while the screen showed a
-# single unchanged "Round N: searching..." line. A Maps scrape that is working
-# finishes in well under a minute; one still going at 75s is wedged, not slow.
-_SOURCE_TIMEOUT = 75   # seconds for one source in one round
+# single unchanged "Round N: searching..." line.
+#
+# This used to end: "A Maps scrape that is working finishes in well under a
+# minute; one still going at 75s is wedged, not slow." That was measured from
+# a developer machine, and it was wrong about the server. Six consecutive runs
+# on the VPS, 2026-11-21, same query:
+#
+#     navigation:          2s, 4s, 29s, 31s, 48s, 58s
+#     to a drawn feed:     59s, 61s, 69s
+#
+# All of them delivered businesses, with no HTTP error logged. A working Maps
+# scrape on this machine routinely takes longer than the ceiling that was
+# meant to catch a wedged one, so the ceiling was killing successes and the
+# harvester reported them as empty markets.
+#
+# 120s sits above the slowest observed success (69s) plus the scraper's own
+# retry headroom, and still well under the round budget. The variance is why
+# it is not set near the mean: a limit near the average fails about half the
+# time, and half the rounds of every hunt were the half that failed.
+_SOURCE_TIMEOUT = 120  # seconds for one source in one round
 
 # ...but 75s is measured from HERE. On 2026-11-18 a Memphis search timed out
 # at 75s while a Lahore search returned five leads in 39s from the same
@@ -268,7 +285,10 @@ _SOURCE_TIMEOUT = 75   # seconds for one source in one round
 # So distant work gets more time. With images blocked and detail pages read in
 # parallel (see scraper.py) the usual case got much faster, and this ceiling is
 # now only for the genuinely slow far-away query.
-_SOURCE_TIMEOUT_FAR = 140
+# Distant queries keep more headroom still: the figures above are for a US
+# query from this server, which is already the "far" case, so 140s remains
+# the right shape - comfortably above the 120s home ceiling.
+_SOURCE_TIMEOUT_FAR = 160
 
 # Where we are. Queries inside this country use the normal timeout; everything
 # else gets the longer one, because distance to the result is the thing being
@@ -289,7 +309,18 @@ def _timeout_for(where: str) -> int:
 # A whole round, all sources together. Even with each source under its own
 # ceiling the round as a whole has to be bounded, or a slow-but-not-timing-out
 # source on every one of 28 templates adds up to the full hour.
-_ROUND_TIMEOUT = 150
+#
+# This MUST stay above _SOURCE_TIMEOUT_FAR, or the round kills a source that
+# is still inside its own allowance - and kills it at the moment it is about
+# to answer, since the slow runs are the ones that queue behind the limit.
+# At 150s against a 160s far-source ceiling that is exactly what happened:
+# the source was permitted 160s by one rule and cut off at 150s by another.
+#
+# Maps alone can legitimately take 69s on this server (measured, see
+# _SOURCE_TIMEOUT), so a round that also crawls websites and checks social
+# pages needs real room. The time budget for the whole hunt, not this
+# ceiling, is what stops a hunt running forever.
+_ROUND_TIMEOUT = max(240, _SOURCE_TIMEOUT_FAR + 60)
 
 # Below this many qualified leads a run is considered "thin" and tolerates far
 # more empty rounds before giving up — the point at which persistence is worth
