@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import random
 import re
+import time
 
 from shared.logger import get_logger
 
@@ -116,8 +117,40 @@ _BLOCKED_RESOURCES = {"image", "media", "font"}
 # margin that thin is not a margin: a hunt calls this dozens of times, so the
 # slowest call of twenty decides whether the round produces leads, and the
 # cost of being wrong is another round reported as an empty market.
-_GOTO_TIMEOUT_MS = 150_000
-_FEED_TIMEOUT_MS = 60_000
+# 110s. Navigation itself was measured at 2-58s on this server; 150s was
+# padding on top of padding, and it came out of the budget the scroll loop
+# needs to actually collect results. The three stages are sequential inside
+# one source ceiling, so time given here is time taken from there.
+_GOTO_TIMEOUT_MS = 110_000
+_FEED_TIMEOUT_MS = 50_000
+
+# How long the scroll-for-more-results loop may run before it settles for what
+# it already has.
+#
+# Measured on the VPS, 2026-11-21, the same query at three sizes:
+#
+#     max_results=5  -> 147s, 5 leads
+#     max_results=20 -> 249s, 20 leads
+#     max_results=40 -> TIMED OUT at 336s, 0 leads
+#
+# Maps delivers ten cards per batch and each batch needs a scroll and a
+# settle, so the cost climbs with the count. The 40-result run was killed by
+# the harvester's ceiling mid-scroll and threw away every card it had already
+# collected - nothing came back from a page that was holding thirty
+# businesses.
+#
+# That is the part worth fixing. A size that is slightly too ambitious should
+# cost a few fewer leads, not all of them. The loop now stops at this deadline
+# and extracts whatever is on the page, so the failure mode is "fewer than you
+# asked for" instead of "an empty market".
+#
+# 90s, not 120s: goto (150s) + feed (60s) + scroll must fit inside the
+# harvester's 300s per-source ceiling, or the scrape is cancelled while
+# holding its cards and the deadline never gets the chance to save them. At
+# 120s the total was 330s - the same inner-limit-above-outer-limit fault this
+# file's history is full of, caught here by the arithmetic check in
+# test_timeouts_nest.py rather than by another empty hunt.
+_SCROLL_DEADLINE_S = 90
 
 
 async def _pause(a: float = 1.0, b: float = 4.0) -> None:
@@ -248,11 +281,22 @@ async def scrape_google_maps(query: str, max_results: int = 20,
             # hunting work. Distance is paid once, not N times.
             place_sel = "a[href*='/maps/place/']"
             seen = 0
+            scroll_started = time.monotonic()
             for step in range(10):
                 count = await feed.locator(place_sel).count()
                 if count >= max_results:
                     break
                 if count == seen and step > 2:
+                    break
+                # Settle for what is here rather than being killed holding it.
+                # The harvester's per-source ceiling does not care that thirty
+                # cards were already loaded; it cancels the task and the leads
+                # go with it.
+                if time.monotonic() - scroll_started > _SCROLL_DEADLINE_S:
+                    log.info("Maps: stopping the scroll at %d businesses after "
+                             "%.0fs (asked for %d) - returning what loaded.",
+                             count, time.monotonic() - scroll_started,
+                             max_results)
                     break
                 seen = count
                 await feed.evaluate("el => el.scrollBy(0, el.scrollHeight)")

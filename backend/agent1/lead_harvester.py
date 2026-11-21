@@ -243,10 +243,30 @@ _DEFAULT_TIME_BUDGET = 3600  # seconds; a hard ceiling on one harvest run
 _BARREN_LIMIT = 6
 
 # Businesses pulled per search round. Three filters run in series afterwards
-# (already-known, verified contact, evidenced site problems), and they multiply:
-# at 20 per round a first hunt yielded only three or four qualified leads. One
-# search returning 40 costs little more than one returning 20.
-_PER_ROUND = 40
+# (already-known, verified contact, evidenced site problems), and they
+# multiply, so a round wants as many businesses as it can afford.
+#
+# This was 40, on the reasoning that "one search returning 40 costs little
+# more than one returning 20". Measured on the VPS, 2026-11-21, the same
+# query at three sizes:
+#
+#     max_results=5  -> 147s, 5 leads
+#     max_results=20 -> 249s, 20 leads
+#     max_results=40 -> TIMED OUT at 336s, 0 leads
+#
+# It does not cost "little more". Maps delivers ten cards at a time and each
+# batch needs a scroll and a settle, so the cost climbs with the count - and
+# past some point the scrape never finishes at all. Asking for 40 was the one
+# value that guaranteed a round produced nothing, which is why every round of
+# a 30-minute hunt logged "Maps took too long" and found zero businesses while
+# a bare 20-result scrape of the identical query worked fine.
+#
+# 20 is the largest size measured to complete, with 249s against a 300s
+# ceiling. That margin is thinner than it looks, which is why the scraper now
+# returns the cards it has when it runs short rather than discarding them -
+# see _SCROLL_DEADLINE_S in scraper.py. Twenty businesses that arrive beat
+# forty that do not.
+_PER_ROUND = 20
 
 # No single search may run longer than this. The time budget above is only
 # tested BETWEEN rounds, so a round that never returns is never interrupted by
@@ -279,7 +299,14 @@ _PER_ROUND = 40
 # 121s and 126s for five leads on the VPS. 120s sat *below* three of those
 # four successes, so the ceiling meant to catch a wedged source was instead
 # discarding ordinary ones.
-_SOURCE_TIMEOUT = 240  # seconds for one source in one round
+#
+# 300s, matching the far-market ceiling. The distinction between home and
+# distant queries was drawn when the difference was real (39s Lahore vs a
+# 75s Memphis timeout), but the slowness measured since is the SERVER's, not
+# the distance's: the scraper's own stages now sum to 250s in the worst case,
+# and a Lahore scrape runs them too. A home ceiling below that would cancel
+# a working Pakistani scrape - the market this business actually sells in.
+_SOURCE_TIMEOUT = 300  # seconds for one source in one round
 
 # ...but 75s is measured from HERE. On 2026-11-18 a Memphis search timed out
 # at 75s while a Lahore search returned five leads in 39s from the same

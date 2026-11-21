@@ -80,14 +80,21 @@ class TimeoutsNestTests(unittest.TestCase):
         """Distance costs time; the far case must never be the stricter one."""
         self.assertGreaterEqual(H._SOURCE_TIMEOUT_FAR, H._SOURCE_TIMEOUT)
 
-    def test_every_ceiling_clears_the_slowest_measured_success(self):
+    def test_every_whole_scrape_ceiling_clears_the_slowest_success(self):
         """The whole outage in one assertion.
 
-        Each of these was below 69s at some point, and each one turned a
-        working scrape into "this market is empty".
+        Only the limits that bound a COMPLETE scrape are compared against the
+        126s figure. page.goto is deliberately not among them: 126s is the
+        end-to-end time - navigate, wait for the feed, scroll for more
+        results, read the cards - while navigation alone measured 2-58s on
+        this server. Holding a single stage to the whole operation's time was
+        an earlier version of this test, and it forced goto to 150s, which
+        took budget away from the scrolling that actually collects results.
+
+        The stages are checked against each other, and against their shared
+        ceiling, in test_the_whole_scrape_fits_inside_its_source_budget.
         """
         for name, seconds in (
-            ("scraper page.goto", S._GOTO_TIMEOUT_MS / 1000),
             ("harvester source (home)", H._SOURCE_TIMEOUT),
             ("harvester source (far)", H._SOURCE_TIMEOUT_FAR),
             ("harvester round", H._ROUND_TIMEOUT),
@@ -98,6 +105,58 @@ class TimeoutsNestTests(unittest.TestCase):
                     f"{name} is {seconds}s, but a SUCCESSFUL scrape was "
                     f"measured at {_SLOWEST_OBSERVED_SUCCESS}s on the "
                     f"production server - this ceiling discards working runs")
+
+    def test_the_page_load_stage_clears_the_slowest_navigation(self):
+        """goto bounds one stage, so it answers to that stage's measurement.
+
+        Navigation times observed on the VPS: 2s, 4s, 29s, 31s, 48s, 58s.
+        """
+        self.assertGreater(
+            S._GOTO_TIMEOUT_MS / 1000, 58,
+            "the slowest navigation measured on this server was 58s")
+
+    def test_the_whole_scrape_fits_inside_its_source_budget_with_room(self):
+        """goto + feed wait + scrolling are sequential, inside one budget.
+
+        The scraper now stops scrolling at a deadline and returns the cards it
+        already has, so a too-ambitious result count costs a few leads instead
+        of all of them. That only works if the harvester has not already
+        cancelled the task: a scrape killed mid-scroll loses everything it was
+        holding, which is what returned zero businesses from a page that had
+        thirty.
+
+        So the three stages must sum to LESS than the source ceiling, with
+        enough left over to extract the cards afterwards. Equality is not
+        enough - at exactly the ceiling the cancellation and the deadline race,
+        and the deadline exists precisely to win that race.
+        """
+        stages = ((S._GOTO_TIMEOUT_MS + S._FEED_TIMEOUT_MS) / 1000
+                  + S._SCROLL_DEADLINE_S)
+        for name, ceiling in (("home", H._SOURCE_TIMEOUT),
+                              ("far", H._SOURCE_TIMEOUT_FAR)):
+            with self.subTest(market=name):
+                self.assertLessEqual(
+                    stages, ceiling - 20,
+                    f"a worst-case scrape needs {stages}s (goto "
+                    f"{S._GOTO_TIMEOUT_MS/1000}s + feed "
+                    f"{S._FEED_TIMEOUT_MS/1000}s + scroll "
+                    f"{S._SCROLL_DEADLINE_S}s) but the {name} source ceiling "
+                    f"is {ceiling}s - leaving under 20s to read the cards, so "
+                    f"the scrape is cancelled still holding them")
+
+    def test_the_scroll_deadline_allows_a_useful_number_of_results(self):
+        """A deadline so tight it beats the first batch is just a smaller ask.
+
+        Maps delivers ten cards per scroll and each batch needs a settle.
+        Measured: 20 results took 249s end to end on the VPS, of which the
+        scrolling is the growing part. The deadline has to allow at least a
+        couple of batches or every round returns the first ten businesses
+        regardless of what was asked for.
+        """
+        self.assertGreaterEqual(
+            S._SCROLL_DEADLINE_S, 60,
+            "under a minute of scrolling cannot reach past the first batch "
+            "or two of results")
 
     def test_the_feed_wait_leaves_room_after_a_slow_navigation(self):
         """goto and feed.wait_for are sequential, inside one source budget.
